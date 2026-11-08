@@ -231,6 +231,17 @@ def analyse_cache_delta(path):
     print(open(path, encoding="utf-8", errors="replace").read().strip())
 
 
+def analyse_run_info(path):
+    if not os.path.exists(path):
+        return
+    text = open(path, encoding="utf-8", errors="replace").read().strip()
+    if not text:
+        return
+    section("Run identity")
+    for line in text.splitlines():
+        print(f"  {line.strip()}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("bundle", help="bundle directory or .zip")
@@ -259,6 +270,7 @@ def main():
         print(f"bundle: {root}")
 
     records = load_jsonl(os.path.join(root, "frametimes.jsonl"))
+    analyse_run_info(os.path.join(root, "run-info.txt"))
     analyse_frames(records)
     analyse_gpu(os.path.join(root, "gpu.csv"))
     analyse_pipelines(os.path.join(root, "pipeline_build.log"))

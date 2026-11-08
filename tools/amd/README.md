@@ -2,6 +2,12 @@
 
 One command records what Lichii is doing while you play, and writes a zip to send back.
 
+When Lichii exits, the script stops sampling, copies the log and writes the archive. If you
+pass `--duration`, it also stops the emulator it started.
+
+If no frame-time samples were recorded, it says so at the end and tells you the likely causes
+rather than handing over an empty zip; the log in the bundle is still useful on its own.
+
 ## Requirements
 
 - The Linux machine with the RX 9070 XT.
@@ -48,7 +54,6 @@ lichii-diag-<timestamp>.zip
 Send that file back.
 
 If you would rather not have the script launch the emulator, start Lichii yourself with:
-
 ```sh
 EDEN_NX2_DEBUG_SERVER=127.0.0.1:6545 \
 EDEN_NX2_GPU_PROFILE=1 \
@@ -62,6 +67,8 @@ and run `frametime_probe.py --out /tmp/frametimes.jsonl` in another terminal.
 
 | File | Contents |
 |---|---|
+| `run-info.txt` | Build (`Lichii Version: ... nx2-<sha>`), the game that was booted, and whether the debug server started — so a bundle identifies itself. |
+| `shader-cache-delta.txt` | Whether the driver pipeline cache grew during the run. Growth means pipelines were compiled while playing, i.e. compilation stutter. |
 | `frametimes.jsonl` | One record per second: `frame_times` (mean/p50/p90/p99/min/max, stutter count, vsync buckets, last 120 frame intervals) plus `status` (title, fps, renderer). Bookmark records where you pressed Enter. |
 | `gpu.csv` | Per second: GPU busy %, shader clock, memory clock, board power. Shows whether stutter lines up with a clock or power drop. |
 | `pipeline_build.log` | `BEGIN`/`END` per driver pipeline build with wall time in ms. The last `BEGIN` without an `END` is a shader the driver was stuck on. |

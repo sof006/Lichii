@@ -292,6 +292,16 @@ done
 
 log "Lichii exited; collecting logs"
 sleep 1
+# With --duration the emulator is still running; stop the one we started.
+if kill -0 "$LICHII_PID" 2>/dev/null; then
+    log "stopping Lichii"
+    kill "$LICHII_PID" 2>/dev/null
+    for _ in 1 2 3 4 5; do
+        kill -0 "$LICHII_PID" 2>/dev/null || break
+        sleep 1
+    done
+    kill -9 "$LICHII_PID" 2>/dev/null
+fi
 [[ -n "$PROBE_PID" ]] && kill "$PROBE_PID" 2>/dev/null
 [[ -n "$GPU_MON_PID" ]] && kill "$GPU_MON_PID" 2>/dev/null
 PROBE_PID=""
@@ -314,6 +324,32 @@ for dir in "${log_dirs[@]}"; do
 done
 
 # --------------------------------------------------------------- summary
+# Identify the run from the emulator's own log, so a bundle says which build
+# produced it without trusting the filename.
+if [[ -f "$OUTDIR/eden_log.txt" ]]; then
+    # Strip the "[ time] Category <Level>" prefix the log puts in front of every line.
+    log_line() {
+        local pattern="$1" fallback="$2" mode="${3:-first}" found
+        if [[ "$mode" == "last" ]]; then
+            found="$(grep -E "$pattern" "$OUTDIR/eden_log.txt" 2>/dev/null | tail -n 1)"
+        else
+            found="$(grep -m1 -E "$pattern" "$OUTDIR/eden_log.txt" 2>/dev/null | head -n 1)"
+        fi
+        [[ -z "$found" ]] && found="$fallback"
+        printf '%s\n' "$found" | sed -E 's/^\[[^]]*\] [A-Za-z0-9_]+ <[A-Za-z]+> //'
+    }
+    {
+        log_line 'Lichii Version:' 'Lichii Version: (not in log)'
+        log_line 'Booting game:' 'Booting game: (no boot line in log)' last
+        log_line 'Debug server listening' 'Debug server: (no listening line)'
+    } > "$OUTDIR/run-info.txt" 2>&1
+else
+    echo "eden_log.txt was not found; the run cannot be identified" > "$OUTDIR/run-info.txt"
+fi
+
+SAMPLES="$(wc -l < "$OUTDIR/frametimes.jsonl" 2>/dev/null || echo 0)"
+SAMPLES="${SAMPLES//[[:space:]]/}"
+
 snapshot_shader_cache "$OUTDIR/shader-cache-after.txt"
 awk '
     NR == FNR { before[$2] = $1; next }
@@ -335,10 +371,32 @@ awk '
 
 {
     echo "bundle: $OUTDIR"
-    echo "samples: $(wc -l < "$OUTDIR/frametimes.jsonl" 2>/dev/null || echo 0)"
+    echo "samples: $SAMPLES"
     echo "marks: $(grep -c '"mark": true' "$OUTDIR/frametimes.jsonl" 2>/dev/null || true)"
+    [[ -f "$OUTDIR/run-info.txt" ]] && cat "$OUTDIR/run-info.txt"
     [[ -f "$OUTDIR/shader-cache-delta.txt" ]] && cat "$OUTDIR/shader-cache-delta.txt"
 } > "$OUTDIR/SUMMARY.txt" 2>&1
+
+# A bundle with no samples cannot be analysed; say what to check rather than
+# handing over an empty zip.
+if [[ "${SAMPLES:-0}" -lt 1 ]]; then
+    cat <<'EOF' >&2
+
+!! No frame-time samples were recorded.
+
+The emulator ran, but its debug server never answered. Most likely:
+
+  * the game had not started — samples only exist once a title is running;
+  * the build has no debug server — check run-info.txt for
+    "Debug server listening" (both builds shipped here have it);
+  * port 6545 was already in use;
+  * the game was closed before it finished booting.
+
+Run it again and stay in gameplay for at least 30 seconds before closing
+Lichii. The log copied into the bundle is still useful on its own.
+
+EOF
+fi
 
 # --------------------------------------------------------------- package
 if [[ -f "$SCRIPT_DIR/analyze_bundle.py" ]] && command -v python3 >/dev/null 2>&1; then
