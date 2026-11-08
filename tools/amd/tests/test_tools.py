@@ -314,5 +314,25 @@ class CompareTests(unittest.TestCase):
         self.assertIn("0 worse", output)
 
 
+    def test_zero_to_positive_counts_as_regression(self):
+        """Compiling pipelines mid-play when the control compiled none must not read as neutral."""
+        base = tempfile.mkdtemp(prefix="lichii-base0-")
+        cand = tempfile.mkdtemp(prefix="lichii-cand0-")
+        self._make_bundle(base, mean_ms=16.7, spike_ms=60.0, stutters=5,
+                          cpu_busy=300.0, waited=40, build_ms=20.0)
+        self._make_bundle(cand, mean_ms=16.7, spike_ms=60.0, stutters=5,
+                          cpu_busy=300.0, waited=40, build_ms=20.0)
+        with open(os.path.join(cand, "shader-cache-delta.txt"), "w", encoding="utf-8") as handle:
+            handle.write("new cache files during the run: 2 (4096 bytes)\n")
+            handle.write("existing cache files that grew: 0 (0 bytes)\n")
+            handle.write("pipelines were built while playing: compilation stutter is present\n")
+
+        completed = subprocess.run(
+            [sys.executable, os.path.join(TOOLS, "compare_bundles.py"), base, cand],
+            capture_output=True, text=True, timeout=60)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("worse: cache files built during play", completed.stdout)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

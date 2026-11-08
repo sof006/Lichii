@@ -48,20 +48,48 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+log() { printf '\033[1m==>\033[0m %s\n' "$*"; }
+
 if [[ -z "$BINARY" ]]; then
     BINARY="${LICHII:-}"
 fi
+
+# A path pasted from a wrapped command often carries a trailing space or CR.
+if [[ -n "$BINARY" ]]; then
+    BINARY="$(printf '%s' "$BINARY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/\r$//')"
+fi
+[[ "$BINARY" == "~/"* ]] && BINARY="$HOME/${BINARY#\~/}"
+
 if [[ -z "$BINARY" ]]; then
     if command -v lichii >/dev/null 2>&1; then
         BINARY="$(command -v lichii)"
     else
-        # A Lichii AppImage sitting in the current directory.
-        BINARY="$(ls -1 ./*.AppImage 2>/dev/null | head -n 1)"
+        # A Lichii AppImage or binary sitting in the current directory.
+        BINARY="$(ls -1 ./*.AppImage ./*.appimage ./lichii 2>/dev/null | head -n 1)"
     fi
 fi
-if [[ -z "$BINARY" || ! -x "$BINARY" ]]; then
-    echo "error: cannot find an executable Lichii binary; pass --binary PATH" >&2
+
+if [[ -z "$BINARY" ]]; then
+    echo "error: could not find Lichii. Pass --binary PATH." >&2
+    echo "       Looked for lichii in \$PATH and for *.AppImage in $PWD" >&2
     exit 2
+fi
+
+if [[ ! -e "$BINARY" ]]; then
+    echo "error: no such file: $BINARY" >&2
+    echo "       Run this from the directory that holds the build, or pass its full path." >&2
+    exit 2
+fi
+
+# A browser download usually drops the executable bit.
+if [[ -f "$BINARY" && ! -x "$BINARY" ]]; then
+    if chmod +x "$BINARY" 2>/dev/null; then
+        log "added the executable bit to $BINARY"
+    else
+        echo "error: $BINARY is not executable and cannot be made so." >&2
+        echo "       Run: chmod +x '$BINARY'" >&2
+        exit 2
+    fi
 fi
 
 STAMP="$(date +%Y%m%d-%H%M%S)"
@@ -81,7 +109,18 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-log() { printf '\033[1m==>\033[0m %s\n' "$*"; }
+# The driver pipeline cache only grows when a pipeline had to be built, so a
+# before/after snapshot separates compilation stutter from plain load.
+snapshot_shader_cache() {
+    local out="$1"
+    : > "$out"
+    for base in "${XDG_DATA_HOME:-$HOME/.local/share}/eden/cache/shader" \
+                "$HOME/.local/share/eden/cache/shader"; do
+        [[ -d "$base" ]] || continue
+        find "$base" -maxdepth 3 -type f -name 'vulkan*' -printf '%s %p\n' 2>/dev/null >> "$out"
+    done
+    sort -k2 -u -o "$out" "$out" 2>/dev/null || true
+}
 
 # ---------------------------------------------------------------- system info
 log "collecting system information"
@@ -165,6 +204,8 @@ cache_candidates=(
 } > "$OUTDIR/shader-cache.txt" 2>&1
 
 # ------------------------------------------------------------------- launch
+snapshot_shader_cache "$OUTDIR/shader-cache-before.txt"
+
 cat <<EOF
 
 Will now start Lichii with:
@@ -273,10 +314,30 @@ for dir in "${log_dirs[@]}"; do
 done
 
 # --------------------------------------------------------------- summary
+snapshot_shader_cache "$OUTDIR/shader-cache-after.txt"
+awk '
+    NR == FNR { before[$2] = $1; next }
+    { after[$2] = $1 }
+    END {
+        for (file in after) {
+            if (!(file in before)) { new_files++; new_bytes += after[file] }
+            else if (after[file] > before[file]) { grew++; grew_bytes += after[file] - before[file] }
+        }
+        printf "new cache files during the run: %d (%d bytes)\n", new_files, new_bytes
+        printf "existing cache files that grew: %d (%d bytes)\n", grew, grew_bytes
+        if (new_files + grew > 0)
+            print "pipelines were built while playing: compilation stutter is present"
+        else
+            print "no cache growth: nothing compiled while playing"
+    }
+' "$OUTDIR/shader-cache-before.txt" "$OUTDIR/shader-cache-after.txt" \
+    > "$OUTDIR/shader-cache-delta.txt" 2>/dev/null || true
+
 {
     echo "bundle: $OUTDIR"
     echo "samples: $(wc -l < "$OUTDIR/frametimes.jsonl" 2>/dev/null || echo 0)"
     echo "marks: $(grep -c '"mark": true' "$OUTDIR/frametimes.jsonl" 2>/dev/null || true)"
+    [[ -f "$OUTDIR/shader-cache-delta.txt" ]] && cat "$OUTDIR/shader-cache-delta.txt"
 } > "$OUTDIR/SUMMARY.txt" 2>&1
 
 # --------------------------------------------------------------- package

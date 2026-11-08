@@ -224,6 +224,13 @@ def analyse_log(path):
             print("  -> most acquires block; look at split-front waits and fences")
 
 
+def analyse_cache_delta(path):
+    if not os.path.exists(path):
+        return
+    section("Compilation during the run")
+    print(open(path, encoding="utf-8", errors="replace").read().strip())
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("bundle", help="bundle directory or .zip")
@@ -255,6 +262,7 @@ def main():
     analyse_frames(records)
     analyse_gpu(os.path.join(root, "gpu.csv"))
     analyse_pipelines(os.path.join(root, "pipeline_build.log"))
+    analyse_cache_delta(os.path.join(root, "shader-cache-delta.txt"))
     analyse_log(os.path.join(root, "eden_log.txt"))
     return 0
 

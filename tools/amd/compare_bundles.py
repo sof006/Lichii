@@ -128,6 +128,18 @@ def read_pipelines(path):
     return out
 
 
+def read_cache_delta(path):
+    """How many cache files appeared or grew during the run, i.e. pipelines built mid-play."""
+    if not os.path.exists(path):
+        return 0
+    total = 0
+    pattern = re.compile(r"(?:new cache files during the run|existing cache files that grew):\s*(\d+)")
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        for match in pattern.finditer(handle.read()):
+            total += int(match.group(1))
+    return total
+
+
 def collect(path):
     root = open_bundle(path)
     records = read_jsonl(os.path.join(root, "frametimes.jsonl"))
@@ -175,6 +187,8 @@ def collect(path):
     metrics["builds"] = pipeline["count"]
     metrics["builds_over_50ms"] = pipeline["over_50ms"]
     metrics["build_max_ms"] = pipeline["max_ms"]
+    metrics["compiled_during_play"] = read_cache_delta(
+        os.path.join(root, "shader-cache-delta.txt"))
     return metrics
 
 
@@ -193,6 +207,7 @@ ROWS = [
     ("GPU thread host CPU (ms/s)", "cpu_busy_ms_s", "down"),
     ("acquires that blocked (%)", "acquire_wait_pct", "down"),
     ("pipeline builds completed", "builds", None),
+    ("cache files built during play", "compiled_during_play", "down"),
     ("builds over 50 ms", "builds_over_50ms", "down"),
     ("slowest build (ms)", "build_max_ms", "down"),
 ]
@@ -225,13 +240,19 @@ def main():
         elif b:
             change = "new"
         print(f"{label:34s} {a:10.2f} {b:10.2f} {change:>9s}  {better or ''}")
-        if better and a:
+        if better is not None:
+            if a == 0 and b == 0:
+                flat += 1
+                continue
+            if a == 0:
+                # Nothing to make a percentage of; moving off zero is the signal.
+                verdict.append((label, better == "up", a, b))
+                continue
             relative = (b - a) / a
             if abs(relative) < 0.005:
                 flat += 1
                 continue
-            improved = (relative > 0) if better == "up" else (relative < 0)
-            verdict.append((label, improved, a, b))
+            verdict.append((label, (relative > 0) if better == "up" else (relative < 0), a, b))
 
     print()
     if verdict or flat:

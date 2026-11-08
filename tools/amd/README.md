@@ -12,10 +12,17 @@ One command records what Lichii is doing while you play, and writes a zip to sen
 
 ## Run it
 
+Keep each command on one line. A split line makes the shell read `--outdir` as a command
+(`zsh: command not found: --outdir`); that is the paste, not the script.
+
 ```sh
 chmod +x lichii-diag.sh frametime_probe.py
 ./lichii-diag.sh --binary /path/to/lichii
 ```
+
+If you downloaded an AppImage, its executable bit is usually missing. The script adds it
+automatically; `chmod +x ./lichii-*.AppImage` works too. With no `--binary` it uses `lichii`
+from `$PATH`, or the first `*.AppImage` in the current directory.
 
 If you run an AppImage, point `--binary` at it and the script works out the rest (it falls
 back to extract-and-run when `/dev/fuse` is unavailable).
