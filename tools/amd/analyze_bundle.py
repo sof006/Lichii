@@ -220,7 +220,7 @@ def analyse_log(path):
     if acquired:
         print(f"  acquires/sec {acquired:.0f}   of which waited {waited:.0f} "
               f"({100.0 * waited / max(acquired, 1.0):.0f}%)")
-        if acquired and waited / acquire > 0.5:
+        if acquired and waited / acquired > 0.5:
             print("  -> most acquires block; look at split-front waits and fences")
 
 

@@ -95,7 +95,10 @@ def main():
     if not host:
         host, port = "127.0.0.1", args.server
 
-    signal.signal(signal.SIGUSR1, _on_signal)
+    if hasattr(signal, "SIGUSR1"):
+        signal.signal(signal.SIGUSR1, _on_signal)
+    else:
+        print("note: SIGUSR1 bookmarks are unavailable on this platform", flush=True)
 
     client = Client(host, int(port), args.sample_timeout)
     started = time.time()
@@ -112,9 +115,10 @@ def main():
                 "t": time.time(),
                 "iso": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
             }
-            if BOOKMARK["at"] is not None:
-                record["bookmark"] = round(BOOKMARK["at"], 3)
-                BOOKMARK["at"] = None
+            # Take any pending bookmark now and emit it as its own record once the
+            # sample is written, so a press is never lost or double-counted.
+            pending_mark = BOOKMARK["at"]
+            BOOKMARK["at"] = None
 
             try:
                 record["status"] = client.call("status")
@@ -145,6 +149,9 @@ def main():
                 if failures > MAX_CONSECUTIVE_FAILURES:
                     print("giving up: server never came back", file=sys.stderr)
                     break
+                # Keep the mark for the next iteration rather than dropping it.
+                if pending_mark is not None and BOOKMARK["at"] is None:
+                    BOOKMARK["at"] = pending_mark
                 time.sleep(min(2.0, args.interval))
                 continue
             except RuntimeError as error:
@@ -152,14 +159,14 @@ def main():
 
             out.write(json.dumps(record, sort_keys=True) + "\n")
 
-            if BOOKMARK["at"] is not None:
+            if pending_mark is not None:
                 out.write(json.dumps({
-                    "t": BOOKMARK["at"],
+                    "t": round(pending_mark, 3),
                     "iso": time.strftime("%Y-%m-%dT%H:%M:%S",
-                                         time.localtime(BOOKMARK["at"])),
+                                         time.localtime(pending_mark)),
                     "mark": True,
                 }, sort_keys=True) + "\n")
-                BOOKMARK["at"] = None
+                print("mark recorded", flush=True)
 
             time.sleep(args.interval)
 
