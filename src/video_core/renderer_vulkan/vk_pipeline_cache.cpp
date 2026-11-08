@@ -40,6 +40,7 @@
 #include "video_core/nx2_perf.h"
 #include "video_core/pipeline_cache_files.h"
 #include "video_core/renderer_vulkan/async_draw_policy.h"
+#include "video_core/pipeline_cache_policy.h"
 #include "video_core/renderer_vulkan/fixed_pipeline_state.h"
 #include "video_core/renderer_vulkan/mesh_fallback_limits.h"
 #include "video_core/renderer_vulkan/maxwell_to_vk.h"
@@ -832,8 +833,25 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipeline() {
         current_pipeline = nullptr;
         return nullptr;
     }
+    if (dynamic_features.has_dynamic_vertex_input) {
+        graphics_key.state.attribute_types = vertex_attribute_types;
+    }
     graphics_key.state.Refresh(*maxwell3d, dynamic_features);
-
+    if (dynamic_features.has_dynamic_vertex_input) {
+        // Refresh only rewrites the types when the vertex input changes, so the masked copy in the
+        // key must not carry over to the next program. Types of attributes the program doesn't
+        // read would split its pipelines by whatever the game left in those registers (Ocarina
+        // of Time: up to 20 keys for the same shaders, each built again in a later session).
+        vertex_attribute_types = graphics_key.state.attribute_types;
+        std::array<u64, Maxwell::MaxShaderProgram> attribute_masks{};
+        for (size_t stage = 0; stage < Maxwell::MaxShaderProgram; ++stage) {
+            if (graphics_key.unique_hashes[stage] != 0) {
+                attribute_masks[stage] = shader_infos[stage]->vertex_attribute_mask;
+            }
+        }
+        graphics_key.state.attribute_types = VideoCommon::KeyedAttributeTypes(
+            vertex_attribute_types, graphics_key.unique_hashes, attribute_masks);
+    }
     if (current_pipeline) {
         GraphicsPipeline* const next{current_pipeline->Next(graphics_key)};
         if (next) {

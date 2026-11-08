@@ -214,6 +214,7 @@ private:
     EmissionBudget emission_budget;
 
     GraphicsPipelineCacheKey graphics_key{};
+    u64 vertex_attribute_types{}; ///< graphics_key's attribute types before the program's mask
     GraphicsPipeline* current_pipeline{};
 
     /// Destroys graphics pipelines unused for a while, once the GPU is done with them.

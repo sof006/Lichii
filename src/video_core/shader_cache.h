@@ -41,6 +41,10 @@ struct ShaderInfo {
     size_t size_bytes{};
     /// Lowered code of a native program, reused when its pipelines are built.
     std::shared_ptr<const LoweredNativeCode> lowered_native;
+    /// Generic inputs a native vertex program reads (its header's input map), two bits per
+    /// attribute as in FixedPipelineState::attribute_types. None for task and mesh programs, all
+    /// set for any other program.
+    u64 vertex_attribute_mask{~u64{0}};
 };
 
 class ShaderCache : public VideoCommon::ChannelSetupCaches<VideoCommon::ChannelInfo> {

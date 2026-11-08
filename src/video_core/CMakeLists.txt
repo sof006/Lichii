@@ -114,6 +114,7 @@ add_library(video_core STATIC
     memory_manager.cpp
     memory_manager.h
     page_filter.h
+    pipeline_cache_policy.h
     native_qmd.h
     native_query_trace.h
     nx2.h
