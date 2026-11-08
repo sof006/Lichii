@@ -409,6 +409,23 @@ class CompareTests(unittest.TestCase):
         self.assertIn("peak", output)
         self.assertIn("read more than 4 MB", output)
 
+    def test_reports_pipeline_binary_state(self):
+        """The analyser must say whether the driver binary cache engaged, and flag 'off'."""
+        bundle = tempfile.mkdtemp(prefix="lichii-pb-test-")
+        with open(os.path.join(bundle, "frametimes.jsonl"), "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"t": 1.0, "frame_times": frame_times_payload()}) + "\n")
+        with open(os.path.join(bundle, "eden_log.txt"), "w", encoding="utf-8") as handle:
+            handle.write("[   1.0] Render.Vulkan <Info> video_core/x.cpp:9:f: "
+                         "Driver pipeline binaries off: setting=true extension=false nvidia=false\n")
+
+        completed = subprocess.run([sys.executable, ANALYZE, bundle],
+                                   capture_output=True, text=True, timeout=60)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        output = completed.stdout
+        self.assertIn("driver binaries", output)
+        self.assertIn("off (setting=true extension=false nvidia=false)", output)
+        self.assertIn("not a cache that is merely cold", output)
+
     def test_reads_frame_trace(self):
         """EDEN_DKB_FRAME_TRACE lines must be attributed to the right component."""
         bundle = tempfile.mkdtemp(prefix="lichii-trace-test-")

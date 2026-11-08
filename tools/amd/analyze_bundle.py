@@ -273,6 +273,7 @@ def analyse_config(path):
     docked = re.compile(r"System\.use_docked_mode:\s*(\w+)")
     split_started = False
     split_stopped = False
+    binaries_state = None
     with open(path, encoding="utf-8", errors="replace") as handle:
         for line in handle:
             for key, pattern in (("gpu_accuracy", accuracy),
@@ -287,6 +288,12 @@ def analyse_config(path):
                 split_started = True
             if "GPU thread split: stopped" in line:
                 split_stopped = True
+            if binaries_state is None:
+                if "Driver pipeline binaries on:" in line:
+                    binaries_state = "on"
+                elif "Driver pipeline binaries off" in line:
+                    detail = line.split("Driver pipeline binaries off", 1)[1].strip(": \t\r\n")
+                    binaries_state = f"off ({detail})"
 
     section("Configuration that gates the fast paths")
     for key in ("gpu_accuracy", "native_async_draws", "vsync", "resolution", "docked"):
@@ -298,6 +305,13 @@ def analyse_config(path):
         print("  GPU thread split      STOPPED by the accuracy settings")
     else:
         print("  GPU thread split      never started")
+    if binaries_state:
+        print(f"  driver binaries       {binaries_state}")
+        if binaries_state.startswith("off"):
+            print("  -> compiled pipelines are not being saved, so every launch"
+                  " recompiles them; this is not a cache that is merely cold")
+    elif True:
+        print("  driver binaries       unknown (build predates the log line)")
     if wanted.get("gpu_accuracy", "").lower() == "high":
         print("  -> GPU accuracy High disables the split GPU thread"
               " (worth up to +54% frame rate); switching to Low turns it back on")
