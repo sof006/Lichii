@@ -60,7 +60,11 @@ inline constexpr std::array<const char*, static_cast<size_t>(Reason::Count)> rea
     "delta overflow", "memory map",
 };
 
-inline std::atomic<bool> g_enabled{true};
+/// EDEN_NX2_FAST_DRAW=0 runs every draw in full, for an A/B against the delta path.
+inline std::atomic<bool> g_enabled{[] {
+    const char* const value = std::getenv("EDEN_NX2_FAST_DRAW");
+    return value == nullptr || value[0] != '0';
+}()};
 
 /// Any thread: whether fast draws run (always, unless a test turned them off). The rasterizer
 /// latches it per draw (on the thread that draws) and starts with a full resolve when it turns on.
