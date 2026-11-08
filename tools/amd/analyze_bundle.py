@@ -298,6 +298,58 @@ def analyse_config(path):
               " Bounded or Skip avoids that hitch")
 
 
+def analyse_frame_trace(path):
+    """EDEN_DKB_FRAME_TRACE=1: where each frame's wall time actually goes.
+
+    acquire_frame -> waiting for a swapchain image (the GPU is behind),
+    record_submit -> CPU recording the frame, present_call -> blocked in
+    vkQueuePresentKHR. Whichever dominates names the limit.
+    """
+    if not os.path.exists(path):
+        return
+    import re
+    field = re.compile(r"(\w+)=(-?[\d.]+)")
+    keys = ("cpu_frame_wall_ms", "cpu_composite_wall_ms", "acquire_frame_wall_ms",
+            "record_submit_wall_ms", "present_call_wall_ms", "frame_end_wall_ms")
+    samples = {key: [] for key in keys}
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if "DKB renderer" not in line:
+                continue
+            for name, value in field.findall(line):
+                if name in samples:
+                    try:
+                        samples[name].append(float(value))
+                    except ValueError:
+                        pass
+    samples = {key: values for key, values in samples.items() if values}
+    if not samples:
+        return
+
+    section("Where the frame time goes (EDEN_DKB_FRAME_TRACE)")
+    for key in keys:
+        if key in samples:
+            values = samples[key]
+            print(f"  {key:26s} mean {statistics.mean(values):7.2f} ms   "
+                  f"p95 {percentile(values, 0.95):7.2f}")
+
+    parts = {key: statistics.mean(samples[key]) for key in
+             ("acquire_frame_wall_ms", "record_submit_wall_ms", "present_call_wall_ms")
+             if key in samples}
+    if parts:
+        total = sum(parts.values())
+        if total > 0:
+            worst = max(parts, key=parts.get)
+            share = 100.0 * parts[worst] / total
+            reading = {
+                "record_submit_wall_ms": "CPU recording the frame — the renderer's CPU side is the limit",
+                "present_call_wall_ms": "blocked in vkQueuePresentKHR — the GPU or the display is the limit",
+                "acquire_frame_wall_ms": "waiting for a free swapchain image — the GPU is behind",
+            }[worst]
+            print(f"\n  dominant: {worst} at {share:.0f}% of acquire+record+present")
+            print(f"  -> {reading}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("bundle", help="bundle directory or .zip")
@@ -332,6 +384,7 @@ def main():
     analyse_gpu(os.path.join(root, "gpu.csv"))
     analyse_pipelines(os.path.join(root, "pipeline_build.log"))
     analyse_cache_delta(os.path.join(root, "shader-cache-delta.txt"))
+    analyse_frame_trace(os.path.join(root, "eden_log.txt"))
     analyse_log(os.path.join(root, "eden_log.txt"))
     return 0
 

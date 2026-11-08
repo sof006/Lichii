@@ -334,6 +334,31 @@ class CompareTests(unittest.TestCase):
         self.assertIn("worse: cache files built during play", completed.stdout)
 
 
+    def test_reads_frame_trace(self):
+        """EDEN_DKB_FRAME_TRACE lines must be attributed to the right component."""
+        bundle = tempfile.mkdtemp(prefix="lichii-trace-test-")
+        with open(os.path.join(bundle, "frametimes.jsonl"), "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"t": 1.0, "frame_times": frame_times_payload()}) + "\n")
+        lines = []
+        for frame in (100, 160, 220):
+            lines.append(
+                "[  10.000] Render.Vulkan <Info> renderer_vulkan.cpp:283:DKB renderer "
+                f"renderer_frame={frame} host_pacing_mode=0 vsync_mode=2 "
+                "cpu_frame_wall_ms=19.520 cpu_composite_wall_ms=18.900 capture_wall_ms=0.010 "
+                "acquire_frame_wall_ms=0.400 record_submit_wall_ms=16.200 "
+                "present_call_wall_ms=1.900 frame_end_wall_ms=0.400\n")
+        with open(os.path.join(bundle, "eden_log.txt"), "w", encoding="utf-8") as handle:
+            handle.writelines(lines)
+
+        completed = subprocess.run([sys.executable, ANALYZE, bundle],
+                                   capture_output=True, text=True, timeout=60)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        output = completed.stdout
+        self.assertIn("Where the frame time goes", output)
+        self.assertIn("record_submit_wall_ms", output)
+        self.assertIn("dominant: record_submit_wall_ms", output)
+        self.assertIn("CPU recording the frame", output)
+
     def test_flags_differing_configuration(self):
         """An A/B that changed gpu_accuracy is measuring the setting, not the build."""
         base = tempfile.mkdtemp(prefix="lichii-cfg-a-")
