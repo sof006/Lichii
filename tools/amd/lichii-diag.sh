@@ -117,11 +117,13 @@ mkdir -p "$OUTDIR/sysinfo"
 
 PROBE_PID=""
 GPU_MON_PID=""
+CPU_MON_PID=""
 LICHII_PID=""
 
 cleanup() {
     [[ -n "$PROBE_PID" ]] && kill "$PROBE_PID" 2>/dev/null
     [[ -n "$GPU_MON_PID" ]] && kill "$GPU_MON_PID" 2>/dev/null
+[[ -n "$CPU_MON_PID" ]] && kill "$CPU_MON_PID" 2>/dev/null
     wait 2>/dev/null
 }
 trap cleanup EXIT INT TERM
@@ -174,6 +176,12 @@ free -h > "$OUTDIR/sysinfo/memory.txt" 2>&1
 
 if command -v vulkaninfo >/dev/null 2>&1; then
     vulkaninfo --summary > "$OUTDIR/sysinfo/vulkaninfo.txt" 2>&1
+    # The read-only table-pointer binding is clamped to maxStorageBufferRange.
+    # If the driver reports a small value, Ocarina's light probes (which sit
+    # around 130 MiB past their pointer) fall outside the binding again.
+    vulkaninfo 2>/dev/null | grep -iE \
+        "maxStorageBufferRange|maxMemoryAllocationSize|maxBufferSize|deviceName|driverInfo" \
+        > "$OUTDIR/sysinfo/vulkan-limits.txt" 2>&1
 else
     echo "vulkaninfo not installed" > "$OUTDIR/sysinfo/vulkaninfo.txt"
 fi
@@ -331,6 +339,44 @@ if [[ -n "$CARD" ]]; then
     GPU_MON_PID=$!
 fi
 
+# ------------------------------------------------------------- cpu monitor
+# Linux has no NCE, so guest code runs on the Dynarmic backend and the emulated
+# CPU is a real suspect for an area-dependent frame rate. Per-thread CPU time
+# says whether the guest threads or the render thread are the ones saturating.
+#
+# The AppImage launcher may fork, and the emulator's threads then live in a
+# child. Lichii is started with setsid, so its process group is ours to search:
+# watch whichever member has the most threads.
+if [[ -d /proc/"$LICHII_PID" ]]; then
+    (
+        echo "t,tid,comm,ticks"
+        while :; do
+            target=""
+            best=0
+            for candidate in $(ps -g "$LICHII_PID" -o pid= 2>/dev/null); do
+                count=$(ls "/proc/$candidate/task" 2>/dev/null | wc -l)
+                if [[ "$count" -gt "$best" ]]; then
+                    best="$count"
+                    target="$candidate"
+                fi
+            done
+            [[ -z "$target" ]] && break
+            now="$(date +%s.%N)"
+            for stat in /proc/"$target"/task/*/stat; do
+                [[ -r "$stat" ]] || continue
+                tid="$(basename "$(dirname "$stat")")"
+                comm="$(tr -d '\n' < "/proc/$target/task/$tid/comm" 2>/dev/null | tr ',' ';')"
+                # utime and stime are fields 14 and 15; comm may contain spaces,
+                # so count from after the last ')'.
+                ticks="$(sed 's/.*) //' "$stat" 2>/dev/null | awk '{print $12+$13}')"
+                printf '%s,%s,"%s",%s\n' "$now" "$tid" "${comm:-?}" "${ticks:-0}"
+            done
+            sleep 1
+        done
+    ) > "$OUTDIR/cpu.csv" 2>/dev/null &
+    CPU_MON_PID=$!
+fi
+
 # ------------------------------------------------------------------- probe
 PROBE="$SCRIPT_DIR/frametime_probe.py"
 if [[ ! -f "$PROBE" ]] || ! command -v python3 >/dev/null 2>&1; then
@@ -373,8 +419,10 @@ if kill -0 "$LICHII_PID" 2>/dev/null; then
 fi
 [[ -n "$PROBE_PID" ]] && kill "$PROBE_PID" 2>/dev/null
 [[ -n "$GPU_MON_PID" ]] && kill "$GPU_MON_PID" 2>/dev/null
+[[ -n "$CPU_MON_PID" ]] && kill "$CPU_MON_PID" 2>/dev/null
 PROBE_PID=""
 GPU_MON_PID=""
+CPU_MON_PID=""
 
 # --------------------------------------------------------------- logs
 log_dirs=(

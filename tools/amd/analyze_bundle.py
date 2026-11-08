@@ -350,6 +350,59 @@ def analyse_frame_trace(path):
             print(f"  -> {reading}")
 
 
+def analyse_cpu(path):
+    """Per-thread CPU time of the emulator process, as a percentage of one core."""
+    if not os.path.exists(path):
+        return
+    try:
+        import os as _os
+        hz = _os.sysconf("SC_CLK_TCK")
+    except (ImportError, ValueError, OSError, AttributeError):
+        hz = 100
+
+    samples = {}
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            parts = line.rstrip("\n").split(",")
+            if len(parts) < 4 or not parts[0].replace(".", "", 1).isdigit():
+                continue
+            try:
+                t = float(parts[0])
+                tid = parts[1]
+                comm = parts[2].strip('"')
+                ticks = float(parts[3])
+            except ValueError:
+                continue
+            samples.setdefault((tid, comm), []).append((t, ticks))
+
+    usage = {}
+    for (tid, comm), points in samples.items():
+        points.sort()
+        if len(points) < 2:
+            continue
+        first, last = points[0], points[-1]
+        seconds = last[0] - first[0]
+        if seconds <= 0.5:
+            continue
+        share = (last[1] - first[1]) / hz / seconds
+        usage[(tid, comm)] = usage.get((tid, comm), 0.0) + share
+
+    if not usage:
+        return
+
+    section("CPU use per thread (% of one core)")
+    ranked = sorted(usage.items(), key=lambda kv: kv[1], reverse=True)[:10]
+    for (tid, comm), share in ranked:
+        print(f"  {comm:26s} tid {tid:>6s}  {100.0 * share:6.1f}%")
+    total = sum(usage.values())
+    print(f"  {'total':26s}          {100.0 * total:6.1f}% across {len(usage)} threads")
+    hot = [(comm, share) for (_, comm), share in usage.items() if share >= 0.9]
+    if hot:
+        print(f"  -> {len(hot)} thread(s) at 90%+ of a core: "
+              f"{', '.join(sorted({c for c, _ in hot}))}")
+        print("     a saturated thread is a good candidate for the limit")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("bundle", help="bundle directory or .zip")
@@ -382,6 +435,7 @@ def main():
     analyse_config(os.path.join(root, "eden_log.txt"))
     analyse_frames(records)
     analyse_gpu(os.path.join(root, "gpu.csv"))
+    analyse_cpu(os.path.join(root, "cpu.csv"))
     analyse_pipelines(os.path.join(root, "pipeline_build.log"))
     analyse_cache_delta(os.path.join(root, "shader-cache-delta.txt"))
     analyse_frame_trace(os.path.join(root, "eden_log.txt"))

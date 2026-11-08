@@ -334,6 +334,27 @@ class CompareTests(unittest.TestCase):
         self.assertIn("worse: cache files built during play", completed.stdout)
 
 
+    def test_reports_hot_cpu_thread(self):
+        """A thread pinned at a full core must be called out as the likely limit."""
+        bundle = tempfile.mkdtemp(prefix="lichii-cpu-test-")
+        with open(os.path.join(bundle, "frametimes.jsonl"), "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"t": 1.0, "frame_times": frame_times_payload()}) + "\n")
+        rows = ["t,tid,comm,ticks\n",
+                '1000.0,101,"GPU thread",0\n',
+                '1002.0,101,"GPU thread",200\n',
+                '1002.0,102,"Cpu Core 0",50\n']
+        with open(os.path.join(bundle, "cpu.csv"), "w", encoding="utf-8") as handle:
+            handle.writelines(rows)
+
+        completed = subprocess.run([sys.executable, ANALYZE, bundle],
+                                   capture_output=True, text=True, timeout=60)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        output = completed.stdout
+        self.assertIn("CPU use per thread", output)
+        self.assertIn("GPU thread", output)
+        self.assertIn("100.0%", output)
+        self.assertIn("thread(s) at 90%+ of a core", output)
+
     def test_reads_frame_trace(self):
         """EDEN_DKB_FRAME_TRACE lines must be attributed to the right component."""
         bundle = tempfile.mkdtemp(prefix="lichii-trace-test-")
