@@ -187,6 +187,11 @@ display_switch=""
 export EDEN_NX2_DEBUG_SERVER="$PORT_STR"
 export EDEN_NX2_GPU_PROFILE=1
 export EDEN_NX2_PIPELINE_BUILD_TRACE="$OUTDIR/pipeline_build.log"
+# Once a second, splits each frame's wall time between swapchain acquire,
+# command recording and vkQueuePresentKHR. That is the only measurement here
+# that says whether the CPU side or the GPU is the limit, and it costs one line
+# per second, so it is always on.
+export EDEN_DKB_FRAME_TRACE=1
 
 for entry in "${EXTRA_SWITCHES[@]}"; do
     name="${entry%%=*}"
@@ -229,6 +234,7 @@ cat <<EOF
 Will now start Lichii with:
   EDEN_NX2_DEBUG_SERVER=$PORT_STR
   EDEN_NX2_GPU_PROFILE=1
+  EDEN_DKB_FRAME_TRACE=1
   EDEN_NX2_PIPELINE_BUILD_TRACE=$OUTDIR/pipeline_build.log
 
 In the game: walk through an area that stutters, and press Enter here whenever

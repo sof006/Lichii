@@ -43,23 +43,9 @@ names the likely cause instead of leaving you with an empty archive.
 If you run an AppImage, point `--binary` at it and the script works out the rest (it falls
 back to extract-and-run when `/dev/fuse` is unavailable).
 
-Extra emulator switches can be added for one run without editing anything:
-
-```sh
-# e.g. the split-chain branch's own wait counters
-./lichii-diag.sh --binary ./lichii --switch EDEN_NX2_ACQUIRE_STATS=1
-```
-
-`EDEN_NX2_FRAME_TRACE` is the one worth adding when the question is *what limits the
-frame rate*:
-
-```sh
-./lichii-diag.sh --binary ./lichii --switch EDEN_DKB_FRAME_TRACE=1
-```
-
-It logs, once a second, how each frame's wall time splits between waiting for a swapchain
-image, recording and submitting commands, and `vkQueuePresentKHR`. The analyser reports which
-dominates and names the limit:
+`EDEN_DKB_FRAME_TRACE=1` is always on. It logs, once a second, how each frame's wall time
+splits between waiting for a swapchain image, recording and submitting commands, and
+`vkQueuePresentKHR`. The analyser reports which dominates and names the limit:
 
 ```
   dominant: present_call_wall_ms at 78% of acquire+record+present
@@ -68,6 +54,12 @@ dominates and names the limit:
 
 Whichever of the three dominates is the bottleneck: `record_submit` means the CPU side of the
 renderer, `present_call` means the GPU or display, `acquire_frame` means the GPU is behind.
+Extra switches can still be added for one run without editing anything:
+
+```sh
+# e.g. the split-chain branch's own wait counters
+./lichii-diag.sh --binary ./lichii --switch EDEN_NX2_ACQUIRE_STATS=1
+```
 
 Then, in Lichii:
 
