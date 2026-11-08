@@ -181,52 +181,57 @@ def analyse_log(path):
     if not os.path.exists(path):
         return
     import re
-    zone_re = re.compile(r"\|\s*([A-Za-z][A-Za-z0-9_ ]*?)\s+([\d.]+)\s+ms\s+\(([\d.]+)/s\)")
+    zone_re = re.compile(r"\|\s*([A-Za-z][A-Za-z0-9_ ]*?)\s+([\d.]+)\s+ms\s*\(([\d.]+)/s\)")
     busy_re = re.compile(r"host_cpu_busy_ms_per_s=([\d.]+)")
     acquire_re = re.compile(r"acquires\s+([\d.]+)\s+\(([\d.]+) waited\)")
 
-    peaks = {}
-    busy = []
-    acquired = 0.0
-    waited = 0.0
+    # With the split on, two threads report: "GPU thread" (front) and
+    # "GPU back thread". Their zones share names, so key by thread or the two
+    # are averaged into one meaningless table.
+    zones = {}
+    busy = {}
+    acquires = {}
     with open(path, encoding="utf-8", errors="replace") as handle:
         for line in handle:
-            if "per second:" not in line:
+            head, marker, rest = line.partition("per second:")
+            if not marker:
                 continue
-            for name, ms, calls in zone_re.findall(line):
-                name = name.strip()
-                entry = peaks.setdefault(name, {"ms": [], "calls": []})
-                entry["ms"].append(float(ms))
-                entry["calls"].append(float(calls))
-            match = busy_re.search(line)
+            thread = head.rsplit(":", 1)[-1].strip() if ":" in head else "GPU thread"
+            thread = thread or "GPU thread"
+            for name, ms, _ in zone_re.findall(rest):
+                zones.setdefault(thread, {}).setdefault(name.strip(), []).append(float(ms))
+            match = busy_re.search(rest)
             if match:
-                busy.append(float(match.group(1)))
-            match = acquire_re.search(line)
+                busy.setdefault(thread, []).append(float(match.group(1)))
+            match = acquire_re.search(rest)
             if match:
-                acquired = max(acquired, float(match.group(1)))
-                waited = max(waited, float(match.group(2)))
+                entry = acquires.setdefault(thread, [0.0, 0.0])
+                entry[0] = max(entry[0], float(match.group(1)))
+                entry[1] = max(entry[1], float(match.group(2)))
 
-    if not peaks and not busy:
+    if not zones and not busy:
         return
 
-    # Mean, not peak: the busiest window of each zone may be a different
-    # window, so mixing per-zone maxima invents a breakdown that never
-    # happened (it reported 961 ms/s of "idle" on an otherwise busy thread).
-    section("GPU thread (mean per 10 s window)")
-    ranked = sorted(peaks.items(), key=lambda kv: statistics.mean(kv[1]["ms"]), reverse=True)
-    for name, entry in ranked[:10]:
-        print(f"  {name:26s} {statistics.mean(entry['ms']):8.1f} ms/s   "
-              f"peak {max(entry['ms']):7.1f}")
-    if busy:
-        print(f"  host CPU busy: mean {statistics.mean(busy):.0f} ms per 1000 ms wall, "
-              f"peak {max(busy):.0f}")
-        if statistics.mean(busy) > 800:
-            print("  -> the GPU thread is CPU-bound; frame rate will track scene complexity")
-    if acquired:
-        print(f"  acquires/sec {acquired:.0f}   of which waited {waited:.0f} "
-              f"({100.0 * waited / max(acquired, 1.0):.0f}%)")
-        if acquired and waited / acquired > 0.5:
-            print("  -> most acquires block; look at split-front waits and fences")
+    for thread in sorted(zones, key=lambda name: -len(zones[name])):
+        section(f"{thread} (mean per 10 s window)")
+        ranked = sorted(zones[thread].items(), key=lambda kv: statistics.mean(kv[1]),
+                        reverse=True)
+        for name, values in ranked[:8]:
+            print(f"  {name:26s} {statistics.mean(values):8.1f} ms/s   peak {max(values):7.1f}")
+        if thread in busy:
+            values = busy[thread]
+            average = statistics.mean(values)
+            print(f"  {'host CPU busy':26s} {average:8.1f} ms per 1000 ms")
+            if average > 950:
+                print("  -> saturated: this thread is the CPU limit")
+            elif average > 800:
+                print("  -> close to the CPU limit; scene complexity will show through")
+        if thread in acquires and acquires[thread][0]:
+            total, waited = acquires[thread]
+            print(f"  {'acquires':26s} {total:8.0f}/s, {waited:.0f} waited "
+                  f"({100.0*waited/max(total,1):.0f}%)")
+            if waited / max(total, 1.0) > 0.5:
+                print("  -> most acquires block here")
 
 
 def analyse_cache_delta(path):

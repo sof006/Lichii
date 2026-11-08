@@ -263,9 +263,9 @@ class AnalyzerTests(unittest.TestCase):
         # The 250 ms build and the dangling BEGIN must both be called out.
         self.assertIn("builds over 50 ms", output)
         self.assertIn("unfinished builds", output)
-        # The zone line and CPU-bound verdict.
+        # The zone line and the CPU-limit verdict.
         self.assertIn("Draw", output)
-        self.assertIn("CPU-bound", output)
+        self.assertIn("CPU limit", output)
         self.assertIn("most acquires block", output)
 
 
