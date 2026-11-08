@@ -14,6 +14,12 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#elif defined(__linux__) && !defined(__ANDROID__)
+#include <dlfcn.h>
+#include <execinfo.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#define NX2_SPLIT_OWNER_CHECK_LINUX
 #endif
 #include <cstring>
 #include <string>
@@ -83,6 +89,35 @@ void GpuSplit::CheckOwner(const char* where) {
     }
     LOG_ERROR(HW_GPU, "GPU split owner check: {} on thread {} while the back runs; stack:{}",
               where, thread, stack);
+#elif defined(NX2_SPLIT_OWNER_CHECK_LINUX)
+    if (!instance.back_running.load(std::memory_order_acquire)) {
+        return;
+    }
+    const u32 thread = static_cast<u32>(syscall(SYS_gettid));
+    if (thread == g_back_thread_id.load(std::memory_order_relaxed)) {
+        return;
+    }
+    static std::atomic<u32> reports{};
+    if (reports.fetch_add(1) >= 12) {
+        return;
+    }
+    // Module+offset per frame, for addr2line -e <module> against the build's binary.
+    std::string stack;
+    void* frames[40];
+    const int count = backtrace(frames, 40);
+    for (int i = 1; i < count; ++i) {
+        Dl_info info{};
+        if (dladdr(frames[i], &info) != 0 && info.dli_fname != nullptr) {
+            const char* base_name = std::strrchr(info.dli_fname, '/');
+            stack += fmt::format(" {}+{:#x}", base_name ? base_name + 1 : info.dli_fname,
+                                 reinterpret_cast<uintptr_t>(frames[i]) -
+                                     reinterpret_cast<uintptr_t>(info.dli_fbase));
+        } else {
+            stack += fmt::format(" {}", frames[i]);
+        }
+    }
+    LOG_ERROR(HW_GPU, "GPU split owner check: {} on thread {} while the back runs; stack:{}",
+              where, thread, stack);
 #else
     (void)where;
 #endif
@@ -104,8 +139,21 @@ void GpuSplit::MaybeStart(Core::System& system_) {
     // mid-game: hand the engines back to the front (and start again when they allow it).
     const bool safe_reads = Settings::IsDMALevelDefault() ? Settings::IsGPULevelHigh()
                                                           : Settings::IsDMALevelSafe();
-    const bool allowed = !safe_reads && !Settings::IsGPULevelHigh() &&
+    // TEST (EDEN_NX2_SPLIT_HIGH=1): also split at High GPU accuracy when the DMA reads are unsafe.
+    // Only with the macros on the back (EDEN_NX2_SPLIT=1): High's macro parameter refresh and
+    // texture cache checks then run there, and the front's semaphore view, which assumes payload
+    // reports land as the back runs them (not at High), stays off.
+    static const bool split_high = mode == '1' && std::getenv("EDEN_NX2_SPLIT_HIGH") != nullptr;
+    const bool high = Settings::IsGPULevelHigh();
+    const bool allowed = !safe_reads && (!high || split_high) &&
                          Settings::values.renderer_backend.GetValue() == Settings::RendererBackend::Vulkan;
+    if (split_high && high && safe_reads && !active) {
+        static std::atomic<bool> hinted{};
+        if (!hinted.exchange(true)) {
+            LOG_WARNING(HW_GPU, "GPU thread split: EDEN_NX2_SPLIT_HIGH needs DMA accuracy Unsafe "
+                                "at High GPU accuracy; the split stays off");
+        }
+    }
     if (active && !allowed) {
         Drain();
         Stop();
@@ -126,8 +174,9 @@ void GpuSplit::MaybeStart(Core::System& system_) {
     ++starts;
     const char* jit = std::getenv("EDEN_NX2_MME_JIT");
     front_macros = mode == '2' && (jit == nullptr || jit[0] != '0');
-    LOG_INFO(HW_GPU, "GPU thread split: engine methods run on a second thread{}",
-             front_macros ? ", macros on the first" : "");
+    LOG_INFO(HW_GPU, "GPU thread split: engine methods run on a second thread{}{}",
+             front_macros ? ", macros on the first" : "",
+             high ? " (High GPU accuracy, EDEN_NX2_SPLIT_HIGH)" : "");
 }
 
 void GpuSplit::Stop() {
@@ -546,6 +595,8 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
     system->RegisterHostThread();
 #ifdef _WIN32
     g_back_thread_id.store(GetCurrentThreadId(), std::memory_order_relaxed);
+#elif defined(NX2_SPLIT_OWNER_CHECK_LINUX)
+    g_back_thread_id.store(static_cast<u32>(syscall(SYS_gettid)), std::memory_order_relaxed);
 #endif
     u64 read_position = 0;
     while (!stop_token.stop_requested()) {
