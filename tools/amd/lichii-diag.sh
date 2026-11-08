@@ -350,6 +350,7 @@ fi
 # child. Lichii is started with setsid, so its process group is ours to search:
 # watch whichever member has the most threads.
 if [[ -d /proc/"$LICHII_PID" ]]; then
+    echo "t,read_bytes,write_bytes" > "$OUTDIR/io.csv"
     (
         echo "t,tid,comm,ticks"
         while :; do
@@ -364,6 +365,14 @@ if [[ -d /proc/"$LICHII_PID" ]]; then
             done
             [[ -z "$target" ]] && break
             now="$(date +%s.%N)"
+            # Bytes this process caused the kernel to read and write. A hitch
+            # with a burst here is loading content, not rendering it.
+            if [[ -r "/proc/$target/io" ]]; then
+                read_bytes="$(awk '/^read_bytes:/ {print $2}' "/proc/$target/io" 2>/dev/null)"
+                write_bytes="$(awk '/^write_bytes:/ {print $2}' "/proc/$target/io" 2>/dev/null)"
+                printf '%s,%s,%s\n' "$now" "${read_bytes:-0}" "${write_bytes:-0}" \
+                    >> "$OUTDIR/io.csv"
+            fi
             for stat in /proc/"$target"/task/*/stat; do
                 [[ -r "$stat" ]] || continue
                 tid="$(basename "$(dirname "$stat")")"

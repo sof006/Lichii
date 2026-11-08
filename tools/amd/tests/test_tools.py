@@ -385,6 +385,30 @@ class CompareTests(unittest.TestCase):
         self.assertIn("100.0%", output)
         self.assertIn("thread(s) at 90%+ of a core", output)
 
+    def test_reports_disk_read_burst(self):
+        """A hitch during a content load must be visible as a read burst."""
+        bundle = tempfile.mkdtemp(prefix="lichii-io-test-")
+        with open(os.path.join(bundle, "frametimes.jsonl"), "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"t": 1.0, "frame_times": frame_times_payload()}) + "\n")
+        rows = ["t,read_bytes,write_bytes\n"]
+        base = 1_000_000.0
+        for index in range(6):
+            # Quiet, then a 10 MB/s burst for one second, then quiet again.
+            read = base + (index * 10_000)
+            if index >= 3:
+                read += 10_000_000
+            rows.append(f"{1000.0 + index:.1f},{read:.0f},0\n")
+        with open(os.path.join(bundle, "io.csv"), "w", encoding="utf-8") as handle:
+            handle.writelines(rows)
+
+        completed = subprocess.run([sys.executable, ANALYZE, bundle],
+                                   capture_output=True, text=True, timeout=60)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        output = completed.stdout
+        self.assertIn("Disk I/O", output)
+        self.assertIn("peak", output)
+        self.assertIn("read more than 4 MB", output)
+
     def test_reads_frame_trace(self):
         """EDEN_DKB_FRAME_TRACE lines must be attributed to the right component."""
         bundle = tempfile.mkdtemp(prefix="lichii-trace-test-")

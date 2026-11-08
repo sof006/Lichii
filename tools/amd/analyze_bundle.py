@@ -433,6 +433,42 @@ def analyse_captures(path):
             print(f"  failed: {entry.get('error')}")
 
 
+def analyse_io(path):
+    """Bytes the emulator read from and wrote to disk, to spot content loading."""
+    if not os.path.exists(path):
+        return
+    samples = []
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            parts = line.rstrip("\n").split(",")
+            if len(parts) < 3 or not parts[0].replace(".", "", 1).isdigit():
+                continue
+            try:
+                samples.append((float(parts[0]), float(parts[1]), float(parts[2])))
+            except ValueError:
+                continue
+    if len(samples) < 3:
+        return
+    reads, writes = [], []
+    for (t0, r0, w0), (t1, r1, w1) in zip(samples, samples[1:]):
+        delta = t1 - t0
+        if delta <= 0:
+            continue
+        reads.append(max(0.0, r1 - r0) / delta)
+        writes.append(max(0.0, w1 - w0) / delta)
+    if not reads:
+        return
+    section("Disk I/O")
+    print(f"  read  mean {statistics.mean(reads)/1e6:7.2f} MB/s   "
+          f"peak {max(reads)/1e6:7.2f} MB/s")
+    print(f"  write mean {statistics.mean(writes)/1e6:6.2f} MB/s   "
+          f"peak {max(writes)/1e6:7.2f} MB/s")
+    busy = [index for index, value in enumerate(reads) if value > 4 * 1e6]
+    if busy:
+        print(f"  {len(busy)} seconds read more than 4 MB "
+              f"(a hitch during one of these is loading, not rendering)")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("bundle", help="bundle directory or .zip")
@@ -466,6 +502,7 @@ def main():
     analyse_frames(records)
     analyse_gpu(os.path.join(root, "gpu.csv"))
     analyse_cpu(os.path.join(root, "cpu.csv"))
+    analyse_io(os.path.join(root, "io.csv"))
     analyse_pipelines(os.path.join(root, "pipeline_build.log"))
     analyse_cache_delta(os.path.join(root, "shader-cache-delta.txt"))
     analyse_captures(os.path.join(root, "captures.jsonl"))
