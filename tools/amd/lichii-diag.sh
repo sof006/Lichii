@@ -19,16 +19,18 @@ OUTROOT=""
 DURATION=0
 GAME_ARGS=()
 PORT_STR="127.0.0.1:6545"
+EXTRA_SWITCHES=()
 
 usage() {
     sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
     cat <<'EOF'
 
 Options:
-  --binary PATH     Lichii binary or AppImage (or set LICHII=/path/to/lichii)
-  --outdir DIR      where to write the bundle (default: ./lichii-diag-<time>)
-  --duration SECS   stop after SECS instead of waiting for Lichii to exit
-  -h, --help        this text
+  --binary PATH       Lichii binary or AppImage (or set LICHII=/path/to/lichii)
+  --outdir DIR        where to write the bundle (default: ./lichii-diag-<time>)
+  --duration SECS     stop after SECS instead of waiting for Lichii to exit
+  --switch NAME=VAL   extra EDEN_NX2_* switch for this run (repeatable)
+  -h, --help          this text
 
 Everything after `--` is passed to Lichii unchanged.
 EOF
@@ -39,6 +41,7 @@ while [[ $# -gt 0 ]]; do
         --binary) BINARY="${2:-}"; shift 2 ;;
         --outdir) OUTROOT="${2:-}"; shift 2 ;;
         --duration) DURATION="${2:-0}"; shift 2 ;;
+        --switch) EXTRA_SWITCHES+=("${2:-}"); shift 2 ;;
         -h|--help) usage; exit 0 ;;
         --) shift; GAME_ARGS=("$@"); break ;;
         *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -127,6 +130,16 @@ fi
 export EDEN_NX2_DEBUG_SERVER="$PORT_STR"
 export EDEN_NX2_GPU_PROFILE=1
 export EDEN_NX2_PIPELINE_BUILD_TRACE="$OUTDIR/pipeline_build.log"
+
+for entry in "${EXTRA_SWITCHES[@]}"; do
+    name="${entry%%=*}"
+    value="${entry#*=}"
+    if [[ "$name" == "$entry" ]]; then
+        export "$name=1"
+    else
+        export "$name=$value"
+    fi
+done
 
 {
     for name in $(env | grep -oE '^(EDEN_[A-Z0-9_]+)=' | tr -d '='); do

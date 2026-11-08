@@ -20,6 +20,13 @@ chmod +x lichii-diag.sh frametime_probe.py
 If you run an AppImage, point `--binary` at it and the script works out the rest (it falls
 back to extract-and-run when `/dev/fuse` is unavailable).
 
+Extra emulator switches can be added for one run without editing anything:
+
+```sh
+# e.g. the split-chain branch's own wait counters
+./lichii-diag.sh --binary ./lichii --switch EDEN_NX2_ACQUIRE_STATS=1
+```
+
 Then, in Lichii:
 
 1. Start Ocarina of Time.
