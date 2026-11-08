@@ -236,6 +236,11 @@ public:
         Commit(2 + payload);
         NoteWrites(writes);
     }
+    /// Defer with write tracking only; the fast-draw flags default to none.
+    template <typename Func>
+    void Defer(const Func& func, Writes writes) {
+        Defer(func, 0, writes);
+    }
     /// Defer, calling `func` with a copy of `words` (a std::span<const u32>).
     template <typename Func>
     void DeferWords(const Func& func, std::span<const u32> words,
@@ -254,6 +259,11 @@ public:
         }
         Commit(2 + payload);
         NoteWrites(writes);
+    }
+    /// Defer with write tracking only; the fast-draw flags default to none.
+    template <typename Func>
+    void Defer(const Func& func, Writes writes) {
+        Defer(func, 0, writes);
     }
     void DeferFunction(std::function<void()>&& func, Writes writes = Writes::Anywhere);
     /// Runs `func` on the back and waits for it: for work on back-owned state, such as a buffer
