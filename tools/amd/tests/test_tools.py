@@ -100,6 +100,9 @@ class MockServer(threading.Thread):
                     result = {"title": "The Legend of Zelda: Ocarina of Time",
                               "program_id": "0400486024DEC000",
                               "fps": 60.2, "paused": False}
+                elif method == "capture_frame":
+                    result = {"directory": "/tmp/mock-capture-1", "frame": 7,
+                              "entries": {"colour": 12}, "command": "frame_dump_index.py"}
                 else:
                     stream.write(json.dumps({"id": request.get("id"),
                                              "error": "unknown method"}).encode() + b"\n")
@@ -217,6 +220,33 @@ class ProbeTests(unittest.TestCase):
             self.skipTest("SIGUSR1 is POSIX only")
         marks = [r for r in read_records(self.out) if r.get("mark")]
         self.assertTrue(marks, "a SIGUSR1 should be recorded as a mark")
+
+    def test_capture_signal(self):
+        """SIGUSR2 must ask the emulator for a frame dump and record where it landed."""
+        if os.name != "posix":
+            self.skipTest("SIGUSR2 is POSIX only")
+        import signal
+        port = free_port()
+        server = MockServer(port)
+        server.start()
+        process = subprocess.Popen(
+            [sys.executable, PROBE, "--server", f"127.0.0.1:{port}",
+             "--out", self.out, "--interval", "0.3", "--window", "1",
+             "--duration", "6", "--sample-timeout", "5"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        try:
+            time.sleep(1.5)
+            process.send_signal(signal.SIGUSR2)
+            time.sleep(2.0)
+        finally:
+            process.wait(timeout=60)
+            server.stop()
+
+        captures = read_records(os.path.join(os.path.dirname(self.out), "captures.jsonl"))
+        self.assertTrue(captures, "a SIGUSR2 should produce a captures.jsonl entry")
+        self.assertTrue(captures[0].get("ok"), captures[0])
+        self.assertIn("directory", captures[0]["result"])
 
 
 class AnalyzerTests(unittest.TestCase):

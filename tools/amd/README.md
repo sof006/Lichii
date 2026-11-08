@@ -66,7 +66,11 @@ Then, in Lichii:
 1. Start Ocarina of Time.
 2. Walk through an area that stutters — Hyrule Field, Castle Town, Kokiri Forest.
 3. **Press Enter in the terminal** whenever you see a stutter. Each press is timestamped.
-4. Close Lichii normally. The bundle is written next to the script:
+4. **Press `c` then Enter** when something looks wrong — white blobs, wrong colours,
+   flicker. That asks the emulator for a frame dump of the current frame, which is how a
+   bad colour is traced to the pass that produced it. It takes a second or two and the
+   result is listed in the bundle's `captures.jsonl`.
+5. Close Lichii normally. The bundle is written next to the script:
 
 ```
 lichii-diag-<timestamp>.zip

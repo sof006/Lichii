@@ -71,6 +71,13 @@ def serve(port):  # noqa: C901 - small and linear
                         "paused": False,
                         "renderer": "Vulkan",
                     }
+                elif method == "capture_frame":
+                    result = {
+                        "directory": "/tmp/mock-capture-1",
+                        "frame": index,
+                        "entries": {"colour": 12, "sampled": 0},
+                        "command": "python3 -I tools/nx2/frame_dump_index.py /tmp/mock-capture-1",
+                    }
                 else:
                     stream.write(json.dumps({"id": request.get("id"),
                                              "error": "unknown method"}).encode() + b"\n")

@@ -246,7 +246,9 @@ Will now start Lichii with:
   EDEN_NX2_PIPELINE_BUILD_TRACE=$OUTDIR/pipeline_build.log
 
 In the game: walk through an area that stutters, and press Enter here whenever
-you see a stutter (each press is timestamped). Then close Lichii normally.
+you see a stutter (each press is timestamped). Press c then Enter to dump the
+current frame instead - that is how a wrong colour or a white blob is traced to
+the pass that produced it. Then close Lichii normally.
 
 EOF
 
@@ -401,8 +403,19 @@ while kill -0 "$LICHII_PID" 2>/dev/null; do
         break
     fi
     if [[ "$interactive" -eq 1 ]]; then
-        if read -r -t 1 -s _ && [[ -n "$PROBE_PID" ]]; then
-            kill -USR1 "$PROBE_PID" 2>/dev/null && log "bookmark"
+        if read -r -t 1 -s key; then
+            case "${key:-}" in
+                c|C)
+                    if [[ -n "$PROBE_PID" ]]; then
+                        kill -USR2 "$PROBE_PID" 2>/dev/null && log "frame capture requested"
+                    fi
+                    ;;
+                *)
+                    if [[ -n "$PROBE_PID" ]]; then
+                        kill -USR1 "$PROBE_PID" 2>/dev/null && log "bookmark"
+                    fi
+                    ;;
+            esac
         fi
     else
         sleep 1

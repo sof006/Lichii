@@ -403,6 +403,36 @@ def analyse_cpu(path):
         print("     a saturated thread is a good candidate for the limit")
 
 
+def analyse_captures(path):
+    """Frame dumps requested by pressing c during the run."""
+    if not os.path.exists(path):
+        return
+    captures = []
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                captures.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+    if not captures:
+        return
+    section("Frame captures")
+    for entry in captures:
+        if entry.get("ok"):
+            result = entry.get("result") or {}
+            print(f"  ok   frame {result.get('frame')} -> {result.get('directory')}")
+            counts = result.get("entries")
+            if isinstance(counts, dict):
+                print(f"       entries: {counts}")
+            if result.get("command"):
+                print(f"       index it: {result['command']}")
+        else:
+            print(f"  failed: {entry.get('error')}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("bundle", help="bundle directory or .zip")
@@ -438,6 +468,7 @@ def main():
     analyse_cpu(os.path.join(root, "cpu.csv"))
     analyse_pipelines(os.path.join(root, "pipeline_build.log"))
     analyse_cache_delta(os.path.join(root, "shader-cache-delta.txt"))
+    analyse_captures(os.path.join(root, "captures.jsonl"))
     analyse_frame_trace(os.path.join(root, "eden_log.txt"))
     analyse_log(os.path.join(root, "eden_log.txt"))
     return 0

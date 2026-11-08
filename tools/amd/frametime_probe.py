@@ -19,12 +19,18 @@ import sys
 import time
 
 BOOKMARK = {"at": None}
+CAPTURE = {"requested": False}
 MAX_CONSECUTIVE_FAILURES = 600
 
 
 def _on_signal(signum, frame):
     BOOKMARK["at"] = time.time()
     print("bookmark requested", flush=True)
+
+
+def _on_capture(signum, frame):
+    CAPTURE["requested"] = True
+    print("frame capture requested", flush=True)
 
 
 class Client:
@@ -101,6 +107,8 @@ def main():
         signal.signal(signal.SIGUSR1, _on_signal)
     else:
         print("note: SIGUSR1 bookmarks are unavailable on this platform", flush=True)
+    if hasattr(signal, "SIGUSR2"):
+        signal.signal(signal.SIGUSR2, _on_capture)
 
     client = Client(host, int(port), args.sample_timeout)
 
@@ -184,6 +192,24 @@ def main():
                     "mark": True,
                 }, sort_keys=True) + "\n")
                 print("mark recorded", flush=True)
+
+            # A frame dump shows every pass's output, which is how a wrong
+            # colour or a NaN blob is traced to the pass that produced it.
+            if CAPTURE["requested"]:
+                CAPTURE["requested"] = False
+                capture_path = os.path.join(os.path.dirname(args.out) or ".",
+                                            "captures.jsonl")
+                try:
+                    result = client.call("capture_frame", {"timeout_s": 60})
+                    entry = {"t": time.time(), "ok": True, "result": result}
+                    print("frame captured", flush=True)
+                except (OSError, ConnectionError, RuntimeError, ValueError) as error:
+                    entry = {"t": time.time(), "ok": False,
+                             "error": f"{type(error).__name__}: {error}"}
+                    print(f"capture failed: {entry['error']}", flush=True)
+                    client.close()
+                with open(capture_path, "a", encoding="utf-8") as capture_file:
+                    capture_file.write(json.dumps(entry, sort_keys=True) + "\n")
 
             time.sleep(args.interval)
 
