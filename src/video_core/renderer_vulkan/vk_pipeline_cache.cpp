@@ -1017,9 +1017,21 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     if (Settings::values.use_vulkan_pipeline_binaries.GetValue() &&
         device.IsKhrPipelineBinarySupported() &&
         device.GetDriverID() != VK_DRIVER_ID_NVIDIA_PROPRIETARY) {
-        device.GetLogical().EnablePipelineBinaryCache(
-            VideoCommon::VersionedPipelineCachePath(base_dir, "vulkan_binaries", CACHE_VERSION));
+        const auto binaries_file =
+            VideoCommon::VersionedPipelineCachePath(base_dir, "vulkan_binaries", CACHE_VERSION);
+        device.GetLogical().EnablePipelineBinaryCache(binaries_file);
         pipeline_binaries_enabled = true;
+        LOG_INFO(Render_Vulkan, "Driver pipeline binaries on: {}",
+                 Common::FS::PathToUTF8String(binaries_file));
+    } else {
+        // Says why, so a run can be told apart from one where the driver simply
+        // does not expose the extension: VK_KHR_pipeline_binary also needs
+        // VK_KHR_maintenance5 for the capture flag.
+        LOG_INFO(Render_Vulkan,
+                 "Driver pipeline binaries off: setting={} extension={} nvidia={}",
+                 Settings::values.use_vulkan_pipeline_binaries.GetValue(),
+                 device.IsKhrPipelineBinarySupported(),
+                 device.GetDriverID() == VK_DRIVER_ID_NVIDIA_PROPRIETARY);
     }
     const auto carried = VideoCommon::CarryOverPipelineCache(
         base_dir, "vulkan", VideoCommon::PipelineCacheMagic,
