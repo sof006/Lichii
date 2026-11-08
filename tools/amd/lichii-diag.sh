@@ -131,8 +131,10 @@ trap cleanup EXIT INT TERM
 snapshot_shader_cache() {
     local out="$1"
     : > "$out"
-    for base in "${XDG_DATA_HOME:-$HOME/.local/share}/eden/cache/shader" \
-                "$HOME/.local/share/eden/cache/shader"; do
+    # XDG_CACHE_HOME/eden/shader/<title id>/vulkan*.bin is where nx2 puts them;
+    # the data directory is a different place and held nothing.
+    for base in "${XDG_CACHE_HOME:-$HOME/.cache}/eden/shader" \
+                "$HOME/.cache/eden/shader"; do
         [[ -d "$base" ]] || continue
         find "$base" -maxdepth 3 -type f -name 'vulkan*' -printf '%s %p\n' 2>/dev/null >> "$out"
     done
@@ -177,9 +179,8 @@ else
 fi
 
 display_switch=""
-if [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
-    display_switch="--enable-qt-wayland"
-fi
+# Qt picks Wayland or X11 by itself; Lichii has no --enable-qt-wayland flag and
+# passes unknown options through to the game.
 
 # ----------------------------------------------------------------- switches
 # Keep the profile cheap: the point is frame timing, not per-draw tracing.

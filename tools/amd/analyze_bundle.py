@@ -195,9 +195,9 @@ def analyse_log(path):
                 continue
             for name, ms, calls in zone_re.findall(line):
                 name = name.strip()
-                entry = peaks.setdefault(name, {"ms": 0.0, "calls": 0.0})
-                entry["ms"] = max(entry["ms"], float(ms))
-                entry["calls"] = max(entry["calls"], float(calls))
+                entry = peaks.setdefault(name, {"ms": [], "calls": []})
+                entry["ms"].append(float(ms))
+                entry["calls"].append(float(calls))
             match = busy_re.search(line)
             if match:
                 busy.append(float(match.group(1)))
@@ -209,9 +209,14 @@ def analyse_log(path):
     if not peaks and not busy:
         return
 
-    section("GPU thread (peak per 10 s window)")
-    for name, entry in sorted(peaks.items(), key=lambda kv: kv[1]["ms"], reverse=True)[:10]:
-        print(f"  {name:26s} {entry['ms']:8.1f} ms/s   {entry['calls']:9.0f} calls/s")
+    # Mean, not peak: the busiest window of each zone may be a different
+    # window, so mixing per-zone maxima invents a breakdown that never
+    # happened (it reported 961 ms/s of "idle" on an otherwise busy thread).
+    section("GPU thread (mean per 10 s window)")
+    ranked = sorted(peaks.items(), key=lambda kv: statistics.mean(kv[1]["ms"]), reverse=True)
+    for name, entry in ranked[:10]:
+        print(f"  {name:26s} {statistics.mean(entry['ms']):8.1f} ms/s   "
+              f"peak {max(entry['ms']):7.1f}")
     if busy:
         print(f"  host CPU busy: mean {statistics.mean(busy):.0f} ms per 1000 ms wall, "
               f"peak {max(busy):.0f}")
@@ -240,6 +245,52 @@ def analyse_run_info(path):
     section("Run identity")
     for line in text.splitlines():
         print(f"  {line.strip()}")
+
+
+def analyse_config(path):
+    """Settings that decide whether the fast paths are even active."""
+    if not os.path.exists(path):
+        return
+    import re
+    wanted = {}
+    accuracy = re.compile(r"Renderer\.gpu_accuracy:\s*(\w+)")
+    async_draws = re.compile(r"Renderer\.native_async_draws:\s*(\w+)")
+    vsync = re.compile(r"Renderer\.use_vsync:\s*(\w+)")
+    resolution = re.compile(r"Renderer\.resolution_setup:\s*(\w+)")
+    docked = re.compile(r"System\.use_docked_mode:\s*(\w+)")
+    split_started = False
+    split_stopped = False
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            for key, pattern in (("gpu_accuracy", accuracy),
+                                 ("native_async_draws", async_draws),
+                                 ("vsync", vsync),
+                                 ("resolution", resolution),
+                                 ("docked", docked)):
+                match = pattern.search(line)
+                if match and key not in wanted:
+                    wanted[key] = match.group(1)
+            if "GPU thread split: engine methods run on a second thread" in line:
+                split_started = True
+            if "GPU thread split: stopped" in line:
+                split_stopped = True
+
+    section("Configuration that gates the fast paths")
+    for key in ("gpu_accuracy", "native_async_draws", "vsync", "resolution", "docked"):
+        if key in wanted:
+            print(f"  {key:22s} {wanted[key]}")
+    if split_started:
+        print("  GPU thread split      ON")
+    elif split_stopped:
+        print("  GPU thread split      STOPPED by the accuracy settings")
+    else:
+        print("  GPU thread split      never started")
+    if wanted.get("gpu_accuracy", "").lower() == "high":
+        print("  -> GPU accuracy High disables the split GPU thread"
+              " (worth up to +54% frame rate); switching to Low turns it back on")
+    if wanted.get("native_async_draws", "").lower() == "wait":
+        print("  -> native_async_draws=Wait blocks on an unbuilt pipeline;"
+              " Bounded or Skip avoids that hitch")
 
 
 def main():
@@ -271,6 +322,7 @@ def main():
 
     records = load_jsonl(os.path.join(root, "frametimes.jsonl"))
     analyse_run_info(os.path.join(root, "run-info.txt"))
+    analyse_config(os.path.join(root, "eden_log.txt"))
     analyse_frames(records)
     analyse_gpu(os.path.join(root, "gpu.csv"))
     analyse_pipelines(os.path.join(root, "pipeline_build.log"))
