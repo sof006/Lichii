@@ -140,8 +140,37 @@ def read_cache_delta(path):
     return total
 
 
-def collect(path):
-    root = open_bundle(path)
+def read_config(path):
+    """The settings that decide whether a comparison is between like runs."""
+    out = {}
+    if not os.path.exists(path):
+        return out
+    patterns = {
+        "gpu_accuracy": re.compile(r"Renderer\.gpu_accuracy:\s*(\w+)"),
+        "native_async_draws": re.compile(r"Renderer\.native_async_draws:\s*(\w+)"),
+        "vsync": re.compile(r"Renderer\.use_vsync:\s*(\w+)"),
+        "resolution": re.compile(r"Renderer\.resolution_setup:\s*(\w+)"),
+        "docked": re.compile(r"System\.use_docked_mode:\s*(\w+)"),
+        "astc": re.compile(r"Renderer\.astc_recompression:\s*(\w+)"),
+    }
+    split = "never started"
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            for key, pattern in patterns.items():
+                if key in out:
+                    continue
+                match = pattern.search(line)
+                if match:
+                    out[key] = match.group(1)
+            if "GPU thread split: engine methods run on a second thread" in line:
+                split = "on"
+            elif "GPU thread split: stopped" in line and split != "on":
+                split = "stopped"
+    out["split"] = split
+    return out
+
+
+def collect(root):
     records = read_jsonl(os.path.join(root, "frametimes.jsonl"))
     windows = [r["frame_times"] for r in records
                if isinstance(r.get("frame_times"), dict) and r["frame_times"].get("frames")]
@@ -219,12 +248,44 @@ def main():
     parser.add_argument("candidate")
     args = parser.parse_args()
 
-    left = collect(args.baseline)
-    right = collect(args.candidate)
+    left_dir = open_bundle(args.baseline)
+    right_dir = open_bundle(args.candidate)
+    left = collect(left_dir)
+    right = collect(right_dir)
+
+    # Compare the settings first: an A/B whose two runs differ in gpu_accuracy
+    # is measuring the setting, not the build.
+    left_cfg = read_config(os.path.join(left_dir, "eden_log.txt"))
+    right_cfg = read_config(os.path.join(right_dir, "eden_log.txt"))
 
     print(f"control  : {args.baseline}")
     print(f"candidate: {args.candidate}")
     print()
+
+    if left_cfg or right_cfg:
+        keys = ["gpu_accuracy", "split", "native_async_draws", "vsync", "resolution", "docked"]
+        print(f"{'setting':24s} {'control':>18s} {'candidate':>18s}")
+        print("-" * 62)
+        differences = []
+        for key in keys:
+            a = left_cfg.get(key, "-")
+            b = right_cfg.get(key, "-")
+            marker = ""
+            if a != b and a != "-" and b != "-":
+                marker = "   <- differs"
+                differences.append(f"{key}: {a} -> {b}")
+            print(f"{key:24s} {a:>18s} {b:>18s}{marker}")
+        print()
+        if differences:
+            print("warning: the two runs are not configured the same, so a difference in the "
+                  "numbers below may be the setting rather than the build:")
+            for line in differences:
+                print(f"  {line}")
+            print()
+        else:
+            print("both runs used the same settings; the numbers below are comparable")
+            print()
+
     print(f"{'metric':34s} {'control':>10s} {'candidate':>10s} {'change':>9s}  better")
     print("-" * 78)
     verdict = []

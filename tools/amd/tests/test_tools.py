@@ -334,5 +334,31 @@ class CompareTests(unittest.TestCase):
         self.assertIn("worse: cache files built during play", completed.stdout)
 
 
+    def test_flags_differing_configuration(self):
+        """An A/B that changed gpu_accuracy is measuring the setting, not the build."""
+        base = tempfile.mkdtemp(prefix="lichii-cfg-a-")
+        cand = tempfile.mkdtemp(prefix="lichii-cfg-b-")
+        for root, accuracy, split in ((base, "High", False), (cand, "Low", True)):
+            with open(os.path.join(root, "frametimes.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({"t": 1.0, "frame_times": frame_times_payload()}) + "\n")
+            lines = ["[   1.0] Config <Info> common/settings.cpp:139:LogSettings: "
+                     f"-- Renderer.gpu_accuracy: {accuracy}\n"]
+            if split:
+                lines.append("[   2.0] Render.Vulkan <Info> gpu_split.cpp:124:MaybeStart: "
+                             "GPU thread split: engine methods run on a second thread\n")
+            with open(os.path.join(root, "eden_log.txt"), "w", encoding="utf-8") as handle:
+                handle.writelines(lines)
+
+        completed = subprocess.run(
+            [sys.executable, os.path.join(TOOLS, "compare_bundles.py"), base, cand],
+            capture_output=True, text=True, timeout=60)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        output = completed.stdout
+        self.assertIn("gpu_accuracy", output)
+        self.assertIn("<- differs", output)
+        self.assertIn("not configured the same", output)
+        self.assertIn("High -> Low", output)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
