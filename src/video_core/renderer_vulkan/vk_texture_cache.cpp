@@ -8,6 +8,7 @@
 #include <limits>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <optional>
 #include <set>
@@ -28,6 +29,7 @@
 #include "shader_recompiler/exception.h"
 
 #include <atomic>
+#include <chrono>
 #include "video_core/gpu_logging/gpu_logging.h"
 #include "video_core/nx2.h"
 #include "video_core/render_trace.h"
@@ -5210,6 +5212,30 @@ void TextureCacheRuntime::TranscodeAstcToBcn(
                                0, barrier);
     });
     image.UploadMemory(output.buffer, output.offset, copies);
+    // How much of the frame this costs is not visible from a pass count alone: one transcode of a
+    // large array is worth hundreds of small ones. Report the rate so a run can be read directly.
+    {
+        static std::atomic<u64> stat_bytes{0};
+        static std::atomic<u64> stat_count{0};
+        static std::atomic<s64> stat_last{0};
+        const u64 bytes = total;
+        stat_bytes.fetch_add(bytes, std::memory_order_relaxed);
+        stat_count.fetch_add(1, std::memory_order_relaxed);
+        const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now().time_since_epoch())
+                             .count();
+        s64 last = stat_last.load(std::memory_order_relaxed);
+        if (now - last >= 10000 && stat_last.compare_exchange_strong(last, now)) {
+            const u64 count = stat_count.exchange(0, std::memory_order_relaxed);
+            const u64 sum = stat_bytes.exchange(0, std::memory_order_relaxed);
+            const double seconds = double(now - last) / 1000.0;
+            LOG_INFO(Render_Vulkan,
+                     "ASTC transcode {:.0f}/s {:.1f} MB/s ({:.2f} MB each) to {}",
+                     double(count) / seconds, double(sum) / seconds / (1024.0 * 1024.0),
+                     count ? double(sum) / double(count) / (1024.0 * 1024.0) : 0.0,
+                     bc3 ? "BC3" : "BC1");
+        }
+    }
     pending.tick = scheduler.CurrentTick();
     pending_transcodes.push_back(std::move(pending));
 }
