@@ -30,6 +30,16 @@ If you downloaded an AppImage, its executable bit is usually missing. The script
 automatically; `chmod +x ./lichii-*.AppImage` works too. With no `--binary` it uses `lichii`
 from `$PATH`, or the first `*.AppImage` in the current directory.
 
+### Check the setup first
+
+```sh
+./lichii-diag.sh --binary ./lichii-*.AppImage --selftest
+```
+
+Starts Lichii, waits for a game to load, and reports the title and fps as soon as the debug
+server answers — about 30 seconds. If that works, a full run will work. If it does not, it
+names the likely cause instead of leaving you with an empty archive.
+
 If you run an AppImage, point `--binary` at it and the script works out the rest (it falls
 back to extract-and-run when `/dev/fuse` is unavailable).
 

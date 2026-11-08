@@ -79,7 +79,9 @@ class Client:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--server", default="127.0.0.1:6545")
-    parser.add_argument("--out", required=True, help="JSONL output path")
+    parser.add_argument("--out", default=None, help="JSONL output path (required unless --once)")
+    parser.add_argument("--once", action="store_true",
+                        help="make one status call, print it, and exit 0 if the server answered")
     parser.add_argument("--interval", type=float, default=1.0,
                         help="seconds between samples (default 1)")
     parser.add_argument("--window", type=float, default=5.0,
@@ -101,6 +103,21 @@ def main():
         print("note: SIGUSR1 bookmarks are unavailable on this platform", flush=True)
 
     client = Client(host, int(port), args.sample_timeout)
+
+    if args.once:
+        try:
+            print(json.dumps(client.call("status"), sort_keys=True))
+        except (OSError, ConnectionError, RuntimeError, ValueError) as error:
+            print(f"{type(error).__name__}: {error}", file=sys.stderr)
+            return 1
+        finally:
+            client.close()
+        return 0
+
+    if not args.out:
+        print("--out is required unless --once is given", file=sys.stderr)
+        return 2
+
     started = time.time()
     failures = 0
     samples = 0
@@ -175,4 +192,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

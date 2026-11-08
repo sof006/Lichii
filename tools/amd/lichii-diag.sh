@@ -17,9 +17,11 @@ set -uo pipefail
 BINARY=""
 OUTROOT=""
 DURATION=0
+SELFTEST=0
 GAME_ARGS=()
 PORT_STR="127.0.0.1:6545"
 EXTRA_SWITCHES=()
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
     sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
@@ -30,6 +32,7 @@ Options:
   --outdir DIR        where to write the bundle (default: ./lichii-diag-<time>)
   --duration SECS     stop after SECS instead of waiting for Lichii to exit
   --switch NAME=VAL   extra EDEN_NX2_* switch for this run (repeatable)
+  --selftest          start Lichii, wait for the game to report in, then exit
   -h, --help          this text
 
 Everything after `--` is passed to Lichii unchanged.
@@ -42,6 +45,7 @@ while [[ $# -gt 0 ]]; do
         --outdir) OUTROOT="${2:-}"; shift 2 ;;
         --duration) DURATION="${2:-0}"; shift 2 ;;
         --switch) EXTRA_SWITCHES+=("${2:-}"); shift 2 ;;
+        --selftest) SELFTEST=1; shift ;;
         -h|--help) usage; exit 0 ;;
         --) shift; GAME_ARGS=("$@"); break ;;
         *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -49,6 +53,19 @@ while [[ $# -gt 0 ]]; do
 done
 
 log() { printf '\033[1m==>\033[0m %s\n' "$*"; }
+
+# Lichii is started in its own session so stopping it also stops anything it
+# spawned; otherwise a leftover child can keep the debug port and the next
+# run silently measures the old process.
+stop_lichii() {
+    [[ -z "${LICHII_PID:-}" ]] && return 0
+    kill -TERM "-$LICHII_PID" 2>/dev/null || kill -TERM "$LICHII_PID" 2>/dev/null
+    for _ in 1 2 3 4 5; do
+        kill -0 "$LICHII_PID" 2>/dev/null || return 0
+        sleep 1
+    done
+    kill -KILL "-$LICHII_PID" 2>/dev/null || kill -KILL "$LICHII_PID" 2>/dev/null
+}
 
 if [[ -z "$BINARY" ]]; then
     BINARY="${LICHII:-}"
@@ -228,9 +245,60 @@ if [[ "$BINARY" == *.AppImage || "$BINARY" == *.appimage ]]; then
 fi
 
 log "starting Lichii"
-"$BINARY" "${EXTRA[@]}" "${GAME_ARGS[@]}" \
-    > "$OUTDIR/lichii-stdout.log" 2>&1 &
+if command -v setsid >/dev/null 2>&1; then
+    setsid "$BINARY" "${EXTRA[@]}" "${GAME_ARGS[@]}" \
+        > "$OUTDIR/lichii-stdout.log" 2>&1 &
+else
+    "$BINARY" "${EXTRA[@]}" "${GAME_ARGS[@]}" \
+        > "$OUTDIR/lichii-stdout.log" 2>&1 &
+fi
 LICHII_PID=$!
+
+# ---------------------------------------------------------------- self-test
+# Answers "will a real run work?" in under a minute, instead of after a full
+# play session that produces an empty bundle.
+if [[ "$SELFTEST" -eq 1 ]]; then
+    PROBE="$SCRIPT_DIR/frametime_probe.py"
+    log "self-test: load the game when Lichii appears (Ctrl+C to stop)"
+    reachable=0
+    emu_exited=0
+    for tick in $(seq 1 150); do
+        if ! kill -0 "$LICHII_PID" 2>/dev/null; then
+            emu_exited=1
+            break
+        fi
+        if python3 "$PROBE" --server "$PORT_STR" --once > "$OUTDIR/selftest-status.json" 2>/dev/null; then
+            reachable=1
+            break
+        fi
+        if (( tick % 15 == 0 )); then
+            log "...still waiting for a game to start ($((tick * 2))s)"
+        fi
+        sleep 2
+    done
+
+    if [[ "$reachable" -eq 1 ]]; then
+        echo
+        log "the debug server answered. This build works for measuring:"
+        sed 's/^/    /' "$OUTDIR/selftest-status.json"
+        echo
+        echo "Now run the real thing:"
+        echo "  $0 --binary $BINARY --outdir $OUTDIR"
+        stop_lichii
+        exit 0
+    fi
+
+    echo
+    if [[ "$emu_exited" -eq 1 ]]; then
+        echo "Lichii exited before its debug server answered." >&2
+    else
+        echo "The debug server did not answer within 5 minutes." >&2
+    fi
+    echo "Most likely the game was not started, or this build has no debug server." >&2
+    echo "Checked: $(basename "$BINARY") on $PORT_STR" >&2
+    stop_lichii
+    exit 1
+fi
 
 # ------------------------------------------------------------- gpu monitor
 # RDNA4 clocks and board power swing with load; a stutter that lines up with a
@@ -257,7 +325,6 @@ if [[ -n "$CARD" ]]; then
 fi
 
 # ------------------------------------------------------------------- probe
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROBE="$SCRIPT_DIR/frametime_probe.py"
 if [[ ! -f "$PROBE" ]] || ! command -v python3 >/dev/null 2>&1; then
     log "warning: python3 or frametime_probe.py missing; timings will be incomplete"
@@ -295,12 +362,7 @@ sleep 1
 # With --duration the emulator is still running; stop the one we started.
 if kill -0 "$LICHII_PID" 2>/dev/null; then
     log "stopping Lichii"
-    kill "$LICHII_PID" 2>/dev/null
-    for _ in 1 2 3 4 5; do
-        kill -0 "$LICHII_PID" 2>/dev/null || break
-        sleep 1
-    done
-    kill -9 "$LICHII_PID" 2>/dev/null
+    stop_lichii
 fi
 [[ -n "$PROBE_PID" ]] && kill "$PROBE_PID" 2>/dev/null
 [[ -n "$GPU_MON_PID" ]] && kill "$GPU_MON_PID" 2>/dev/null
