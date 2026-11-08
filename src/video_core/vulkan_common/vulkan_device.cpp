@@ -1727,6 +1727,19 @@ void Device::RemoveUnsuitableExtensions() {
         LOG_WARNING(Render_Vulkan, "EDEN_NX2_FORCE_MESH_FALLBACK: VK_EXT_mesh_shader disabled");
         extensions.mesh_shader = false;
     }
+    // RADV: native task/mesh draws reset the GPU on every AMD generation reported so far (RX 6000,
+    // 7000 and 9000, Mesa 26.0 to 27.0-devel; #316, #670, #672), and the reset takes the desktop
+    // down with it. The compute fallback avoids the resets, but it is slower in scenes full of
+    // foliage and skips the mesh programs it can't run (per-primitive outputs, primitives other
+    // than triangles, layered output). EDEN_NX2_NATIVE_MESH=1 keeps VK_EXT_mesh_shader, to test a
+    // new Mesa; any other value keeps the fallback.
+    const char* const native_mesh = std::getenv("EDEN_NX2_NATIVE_MESH");
+    if (extensions.mesh_shader && properties.driver.driverID == VK_DRIVER_ID_MESA_RADV &&
+        (native_mesh == nullptr || native_mesh[0] != '1')) {
+        LOG_INFO(Render_Vulkan, "RADV: task/mesh draws use the compute fallback, because native "
+                                "mesh draws reset the GPU (EDEN_NX2_NATIVE_MESH=1 keeps them)");
+        extensions.mesh_shader = false;
+    }
     RemoveExtensionFeatureIfUnsuitable(extensions.mesh_shader, features.mesh_shader,
                                        VK_EXT_MESH_SHADER_EXTENSION_NAME);
 
