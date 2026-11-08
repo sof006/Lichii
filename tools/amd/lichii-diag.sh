@@ -182,6 +182,12 @@ if command -v vulkaninfo >/dev/null 2>&1; then
     vulkaninfo 2>/dev/null | grep -iE \
         "maxStorageBufferRange|maxMemoryAllocationSize|maxBufferSize|deviceName|driverInfo" \
         > "$OUTDIR/sysinfo/vulkan-limits.txt" 2>&1
+    # Whether the driver exposes the pieces the pipeline-binary cache needs.
+    # Without them compiled pipelines are recompiled every launch, which is the
+    # difference between a first and a second run being fast.
+    vulkaninfo 2>/dev/null | grep -iE \
+        "VK_KHR_pipeline_binary|VK_KHR_maintenance5|pipelineBinaries|pipelineBinary" \
+        > "$OUTDIR/sysinfo/vulkan-pipeline-binary.txt" 2>&1
 else
     echo "vulkaninfo not installed" > "$OUTDIR/sysinfo/vulkaninfo.txt"
 fi
