@@ -154,6 +154,7 @@ def read_config(path):
         "astc": re.compile(r"Renderer\.astc_recompression:\s*(\w+)"),
     }
     split = "never started"
+    split_mode = ""
     with open(path, encoding="utf-8", errors="replace") as handle:
         for line in handle:
             for key, pattern in patterns.items():
@@ -164,9 +165,11 @@ def read_config(path):
                     out[key] = match.group(1)
             if "GPU thread split: engine methods run on a second thread" in line:
                 split = "on"
+                # Mode 2 also runs macros on the front thread; the line says so.
+                split_mode = "2 (macros on the front)" if "macros on the first" in line else "1"
             elif "GPU thread split: stopped" in line and split != "on":
                 split = "stopped"
-    out["split"] = split
+    out["split"] = f"{split}, mode {split_mode}" if split_mode else split
     return out
 
 
@@ -264,8 +267,10 @@ def main():
 
     if left_cfg or right_cfg:
         keys = ["gpu_accuracy", "split", "native_async_draws", "vsync", "resolution", "docked"]
-        print(f"{'setting':24s} {'control':>18s} {'candidate':>18s}")
-        print("-" * 62)
+        width = max(18, *(len(str(left_cfg.get(key, "-"))) for key in keys),
+                    *(len(str(right_cfg.get(key, "-"))) for key in keys))
+        print(f"{'setting':24s} {left_cfg and 'control':>{width}s} {'candidate':>{width}s}")
+        print("-" * (26 + 2 * width))
         differences = []
         for key in keys:
             a = left_cfg.get(key, "-")
@@ -274,7 +279,7 @@ def main():
             if a != b and a != "-" and b != "-":
                 marker = "   <- differs"
                 differences.append(f"{key}: {a} -> {b}")
-            print(f"{key:24s} {a:>18s} {b:>18s}{marker}")
+            print(f"{key:24s} {a:>{width}s} {b:>{width}s}{marker}")
         print()
         if differences:
             print("warning: the two runs are not configured the same, so a difference in the "
