@@ -63,6 +63,19 @@ and run `frametime_probe.py --out /tmp/frametimes.jsonl` in another terminal.
 | `shader-cache.txt` | Size of the Lichii and Mesa shader caches, so a cold cache can be told from a warm one. |
 | `switches.txt` | The `EDEN_*` environment the run actually used. |
 
+## Comparing two runs
+
+When two builds are being A/B tested, one command turns the pair into a verdict:
+
+```sh
+python3 compare_bundles.py run-baseline run-candidate
+```
+
+It prints each metric for both runs with the relative change, then a summary line
+(`N improved, M worse, K unchanged`). Metrics where lower is better — frame time p99, stutters,
+blocked acquires, slow pipeline builds — are marked, and only real movement (≥0.5 %) counts;
+a metric that did not change is reported as unchanged rather than as a regression.
+
 ## Reading it (what we are looking for)
 
 - **`vsync_buckets` concentrated at 1/2/3** with `stutters` high → pacing or vsync problem,

@@ -269,5 +269,50 @@ class AnalyzerTests(unittest.TestCase):
         self.assertIn("most acquires block", output)
 
 
+class CompareTests(unittest.TestCase):
+    def _make_bundle(self, root, mean_ms, spike_ms, stutters, cpu_busy, waited, build_ms):
+        os.makedirs(root, exist_ok=True)
+        records = []
+        for index in range(5):
+            payload = frame_times_payload(frames=600, mean_ms=mean_ms)
+            payload["p99_ms"] = spike_ms
+            payload["max_ms"] = spike_ms
+            payload["intervals_ms"] = [mean_ms] * 18 + [spike_ms] * 2
+            payload["stutters"] = stutters
+            records.append({"t": 1700000000 + index, "frame_times": payload})
+        with open(os.path.join(root, "frametimes.jsonl"), "w", encoding="utf-8") as handle:
+            for record in records:
+                handle.write(json.dumps(record) + "\n")
+        with open(os.path.join(root, "gpu.csv"), "w", encoding="utf-8") as handle:
+            handle.write("t,gpu_busy_percent,sclk_mhz,power_w,mclk_mhz\n")
+            for index in range(5):
+                handle.write(f"{1700000000 + index},90,3000,250,1200\n")
+        with open(os.path.join(root, "pipeline_build.log"), "w", encoding="utf-8") as handle:
+            handle.write(f"END graphics pipeline=0000000000000001 thread=1 ms={build_ms}\n")
+        with open(os.path.join(root, "eden_log.txt"), "w", encoding="utf-8") as handle:
+            handle.write(
+                f"HW.GPU <Info> GPU thread per second: | Draw 100.0 ms (4000/s) "
+                f"| host_cpu_busy_ms_per_s={cpu_busy} window_wall_ms=10000.0 "
+                f"| acquires 500 ({waited} waited)\n")
+
+    def test_reports_improvement_direction(self):
+        base = tempfile.mkdtemp(prefix="lichii-base-")
+        cand = tempfile.mkdtemp(prefix="lichii-cand-")
+        self._make_bundle(base, mean_ms=21.0, spike_ms=150.0, stutters=40,
+                          cpu_busy=900.0, waited=400, build_ms=180.0)
+        self._make_bundle(cand, mean_ms=16.7, spike_ms=60.0, stutters=5,
+                          cpu_busy=300.0, waited=40, build_ms=20.0)
+
+        completed = subprocess.run(
+            [sys.executable, os.path.join(TOOLS, "compare_bundles.py"), base, cand],
+            capture_output=True, text=True, timeout=60)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        output = completed.stdout
+        self.assertIn("verdict:", output)
+        self.assertIn("unchanged", output)
+        self.assertNotIn("worse:", output, "no directional metric should regress here")
+        self.assertIn("0 worse", output)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
