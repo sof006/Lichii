@@ -260,11 +260,6 @@ public:
         Commit(2 + payload);
         NoteWrites(writes);
     }
-    /// Defer with write tracking only; the fast-draw flags default to none.
-    template <typename Func>
-    void Defer(const Func& func, Writes writes) {
-        Defer(func, 0, writes);
-    }
     void DeferFunction(std::function<void()>&& func, Writes writes = Writes::Anywhere);
     /// Runs `func` on the back and waits for it: for work on back-owned state, such as a buffer
     /// cache download that records into the Vulkan scheduler. A drained back still submits from
