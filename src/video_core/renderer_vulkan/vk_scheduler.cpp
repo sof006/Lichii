@@ -617,6 +617,7 @@ void Scheduler::BeginRenderPassImpl(const Framebuffer* framebuffer, VkRenderPass
     ++trace_counts.render_passes;
     const VkFramebuffer framebuffer_handle = framebuffer->Handle();
     const VkExtent2D render_area = framebuffer->RenderArea();
+    ++render_pass_serial;
     state.renderpass = renderpass;
     state.framebuffer = framebuffer_handle;
     state.render_area = render_area;
@@ -1247,6 +1248,7 @@ void Scheduler::EndRenderPass(std::source_location cause)
             static_cast<u8>(render_pass_has_stores ? RecordSite::PassHadStores : 0);
         render_pass_has_stores = false;
         last_pass_end = cause;
+        ++render_pass_serial;
 
         query_cache->CounterClose(VideoCommon::QueryType::StreamingByteCount);
 

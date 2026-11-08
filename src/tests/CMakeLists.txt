@@ -51,6 +51,7 @@ add_executable(tests
     video_core/ampere_logged_numeric.cpp
     video_core/ampere_logged_textures.cpp
     video_core/native_texture_header_index.cpp
+    video_core/texture_alias_ticks.cpp
     video_core/texture_handles.cpp
     video_core/ampere_selevet_modes.cpp
     video_core/ampere_selevet_spills.cpp
@@ -107,6 +108,7 @@ add_executable(tests
     video_core/storage_binding_capacity.cpp
     video_core/native_indirect_reset.cpp
     video_core/native_qmd.cpp
+    video_core/fast_draw.cpp
     video_core/gpu_command_safety.cpp
     video_core/syncpoint_actions.cpp
     video_core/nx2_video_render.cpp

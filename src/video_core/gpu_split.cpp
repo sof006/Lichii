@@ -29,6 +29,7 @@
 #include "video_core/gpu_wait_stats.h"
 #include "video_core/memory_manager.h"
 #include "video_core/nx2.h"
+#include "video_core/nx2_fast_draw.h"
 #include "video_core/nx2_profile.h"
 
 namespace VideoCommon {
@@ -654,6 +655,9 @@ size_t GpuSplit::Execute(const u64* entry, size_t words) {
             }
             return (head & HasSegment) != 0 ? 2 : 1;
         }
+        if (!engine->reports_fast_draw_breaks) {
+            Nx2FastDraw::Break(Nx2FastDraw::Reason::OtherEngine);
+        }
         if ((head & Direct) != 0) {
             Nx2Profile::Scope method_scope{Nx2Profile::Zone::Method};
             engine->ConsumeSink(*system);
@@ -675,6 +679,9 @@ size_t GpuSplit::Execute(const u64* entry, size_t words) {
         const u32 amount = static_cast<u32>(head >> 32);
         const size_t data = (head & HasSegment) != 0 ? 3 : 2;
         auto* const engine = back_engine;
+        if (!engine->reports_fast_draw_breaks) {
+            Nx2FastDraw::Break(Nx2FastDraw::Reason::OtherEngine);
+        }
         Nx2Profile::Scope method_scope{Nx2Profile::Zone::Method};
         engine->ConsumeSink(*system);
         if ((head & HasSegment) != 0) {
@@ -685,6 +692,9 @@ size_t GpuSplit::Execute(const u64* entry, size_t words) {
         return data + (amount + 1) / 2;
     }
     case Kind::Call: {
+        if ((head & FastDrawNeutral) == 0) {
+            Nx2FastDraw::Break(Nx2FastDraw::Reason::Call);
+        }
         const size_t payload = static_cast<size_t>((head >> 8) & 0xffffff);
         reinterpret_cast<void (*)(const u64*)>(entry[1])(entry + 2);
         return 2 + payload;

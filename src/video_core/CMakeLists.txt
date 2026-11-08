@@ -126,6 +126,8 @@ add_library(video_core STATIC
     nx2_list_indirect.h
     nx2_list_indirect_stats.h
     nx2_list_stats.h
+    nx2_fast_draw.cpp
+    nx2_fast_draw.h
     nx2_profile.h
     nx2_perf.h
     nx2_download_trace.h

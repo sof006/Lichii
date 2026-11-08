@@ -69,6 +69,40 @@ struct ImageViewInOut {
     ImageViewId id{};
 };
 
+/// A texture handle word a draw read, and where.
+struct TextureHandleRead {
+    GPUVAddr address{};
+    u32 raw{};
+};
+
+/// What a draw's sampled textures were resolved from, kept by the pipeline that drew them. The
+/// next draw with the same pipeline resolves its textures from it (ResolveMemoizedTextures) while
+/// every byte they came from is the same: the handle words, the texture and sampler descriptors
+/// and the tables, mappings and views behind them.
+struct SampledTextureMemo {
+    struct Entry {
+        GPUVAddr handle_address{};
+        const u8* handle_host{}; ///< The handle word in host memory
+        const u8* tic_host{};
+        const u8* tsc_host{};
+        TICEntry tic{};
+        TSCEntry tsc{};
+        u32 raw{};        ///< The handle word
+        u32 view_index{}; ///< The texture header index the handle gives
+        ImageViewId view{};
+        SamplerId sampler{};
+    };
+    std::vector<Entry> entries;
+    const void* memory{};      ///< The address space the pointers belong to
+    const void* image_table{}; ///< The channel's table the views were read from
+    u64 host_serial{};         ///< MemoryManager::HostPointerSerial
+    u64 image_changes{};       ///< DescriptorTable::changes of both tables
+    u64 sampler_changes{};
+    bool via_header_index{}; ///< The sampler binding the handles were split with
+    bool valid{};
+    u32 misses{}; ///< Draws in a row that did not find the memo good
+};
+
 struct AsyncDecodeContext {
     ImageId image_id;
     Common::ScratchBuffer<u8> decoded_data;
@@ -246,6 +280,18 @@ public:
 
     /// Fill image_view_ids with the graphics/compute images in indices
     void FillImageViews(std::span<ImageViewInOut> views, bool compute, bool blacklist = true);
+
+    /// Fills views and samplers of a draw from the pipeline's memo when nothing they were
+    /// resolved from has changed since (true), prepares the images as FillImageViews does.
+    /// handle_addresses are where the draw reads its texture handles from, in binding order.
+    [[nodiscard]] bool ResolveMemoizedTextures(SampledTextureMemo& memo,
+                                               std::span<const GPUVAddr> handle_addresses,
+                                               std::span<ImageViewInOut> views,
+                                               std::span<SamplerId> samplers);
+
+    /// Keeps what FillImageViews and GetSamplerId resolved the draw's textures from.
+    void MemoizeTextures(SampledTextureMemo& memo, std::span<const TextureHandleRead> reads,
+                         std::span<const ImageViewInOut> views, std::span<const SamplerId> samplers);
 
     /// Handle feedback loops during draws.
     void CheckFeedbackLoop(std::span<const ImageViewInOut> views);

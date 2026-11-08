@@ -150,7 +150,9 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                 } else if (std::holds_alternative<GPUTickCommand>(next.data)) {
                     // The sync operations (the back may run them between any two entries too,
                     // GpuSplit::RequestTick): flushes write guest memory where GPU work wrote.
+                    // TickWork ends fast draw reuse itself when it runs a request.
                     split.Defer([gpu = &system.GPU()] { gpu->TickWork(); },
+                                VideoCommon::GpuSplit::FastDrawNeutral,
                                 VideoCommon::GpuSplit::Writes::Caches);
                 } else if (auto* run = std::get_if<RunCommand>(&next.data)) {
                     if (run->before_later_reads) {
@@ -177,6 +179,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                 }
                 split.Defer([state_ptr = &state, fence = next.fence,
                              block = next.block] { SignalCommand(*state_ptr, fence, block); },
+                            VideoCommon::GpuSplit::FastDrawNeutral,
                             VideoCommon::GpuSplit::Writes::Noted);
                 split.Publish();
                 last_progress = std::chrono::steady_clock::now();
