@@ -217,7 +217,8 @@ private:
     u64 vertex_attribute_types{}; ///< graphics_key's attribute types before the program's mask
     GraphicsPipeline* current_pipeline{};
 
-    /// Destroys graphics pipelines unused for a while, once the GPU is done with them.
+    /// Over the pipeline memory budget, destroys the least recently used graphics pipelines unused
+    /// for a while, once the GPU is done with them.
     void EvictUnusedPipelines();
     u64 frame_count{};
     /// Wait budget of native draws for unbuilt pipelines left in this frame, in microseconds

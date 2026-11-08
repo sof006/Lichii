@@ -25,6 +25,7 @@
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
 #include "common/thread.h"
+#include "common/memory_detect.h"
 #include "common/thread_worker.h"
 #include "core/core.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
@@ -39,8 +40,8 @@
 #include "video_core/memory_manager.h"
 #include "video_core/nx2_perf.h"
 #include "video_core/pipeline_cache_files.h"
-#include "video_core/renderer_vulkan/async_draw_policy.h"
 #include "video_core/pipeline_cache_policy.h"
+#include "video_core/renderer_vulkan/async_draw_policy.h"
 #include "video_core/renderer_vulkan/fixed_pipeline_state.h"
 #include "video_core/renderer_vulkan/mesh_fallback_limits.h"
 #include "video_core/renderer_vulkan/maxwell_to_vk.h"
@@ -852,6 +853,7 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipeline() {
         graphics_key.state.attribute_types = VideoCommon::KeyedAttributeTypes(
             vertex_attribute_types, graphics_key.unique_hashes, attribute_masks);
     }
+
     if (current_pipeline) {
         GraphicsPipeline* const next{current_pipeline->Next(graphics_key)};
         if (next) {
@@ -1705,44 +1707,52 @@ void PipelineCache::EvictUnusedPipelines() {
         return;
     }
     // Each built pipeline holds ~0.45 MB of driver memory and none was ever destroyed, so it grew
-    // with every place a session went (title 1: 1,500 on its title screen alone). One unused for
-    // this long is destroyed; it takes 2-3 ms to build again from the driver's pipeline cache.
+    // with every place a session went (title 1: 1,500 on its title screen alone). Past a budget of
+    // 1/16 of host RAM, the least recently used ones unused for this long are destroyed. Below it
+    // none are: an area coming back needs hundreds at once (Ocarina of Time: 2-3 s of draws held
+    // per 10 s), and each takes 2-3 ms to build again even from the driver's pipeline cache.
     constexpr u64 EvictAfterFrames = 9000;
-    if (frame_count <= EvictAfterFrames) {
+    static const size_t budget =
+        VideoCommon::GraphicsPipelineBudget(Common::GetMemInfo().TotalPhysicalMemory);
+    if (frame_count <= EvictAfterFrames || graphics_cache.size() <= budget) {
         return;
     }
     const u64 cutoff = frame_count - EvictAfterFrames;
-    const u64 tick = scheduler.CurrentTick();
     // ~0.9 GB of driver memory at ~0.45 MB each.
     constexpr size_t MaxUnusedPrebuiltPipelines = 2000;
     size_t kept_prebuilt = 0;
-    size_t evicted = 0;
-    for (auto it = graphics_cache.begin(); it != graphics_cache.end();) {
-        GraphicsPipeline* const pipeline = it->second.get();
-        if (pipeline == nullptr || pipeline == current_pipeline || !pipeline->IsBuilt() ||
+    std::vector<std::pair<u64, GraphicsPipelineCacheKey>> candidates;
+    for (const auto& [key, pipeline] : graphics_cache) {
+        if (pipeline == nullptr || pipeline.get() == current_pipeline || !pipeline->IsBuilt() ||
             pipeline->LastUse() >= cutoff) {
-            ++it;
             continue;
         }
         // A pipeline built from the disk cache at boot that no draw has used yet stays, up to a
-        // budget: evicting it throws the prebuild away, and the game translates it again on the
-        // GPU thread when it reaches that content (OoT: 1174 of 1346 evicted on the title screen,
-        // 684 rebuilt in 10 s on entering the field). Past the budget they go like the rest, so a
-        // large cache can't hold their driver memory for the whole session.
+        // cap: evicting it throws the prebuild away, and the game translates it again on the GPU
+        // thread when it reaches that content (OoT: 1174 of 1346 evicted on the title screen, 684
+        // rebuilt in 10 s on entering the field). Past the cap they go like the rest, so a large
+        // cache can't hold their driver memory for the whole session.
         if (!pipeline->WasUsed() && kept_prebuilt < MaxUnusedPrebuiltPipelines) {
             ++kept_prebuilt;
-            ++it;
             continue;
         }
-        if (used_this_session.erase(pipeline) != 0) {
+        candidates.emplace_back(pipeline->LastUse(), key);
+    }
+    const size_t evicted =
+        VideoCommon::GraphicsPipelinesToEvict(graphics_cache.size(), candidates.size(), budget);
+    if (evicted == 0) {
+        return;
+    }
+    std::nth_element(candidates.begin(), candidates.begin() + (evicted - 1), candidates.end(),
+                     [](const auto& a, const auto& b) { return a.first < b.first; });
+    const u64 tick = scheduler.CurrentTick();
+    for (size_t i = 0; i < evicted; ++i) {
+        const auto it = graphics_cache.find(candidates[i].second);
+        if (used_this_session.erase(it->second.get()) != 0) {
             used_and_evicted.insert(it->first.Hash());
         }
         evicted_pipelines.emplace_back(tick, std::move(it->second));
-        it = graphics_cache.erase(it);
-        ++evicted;
-    }
-    if (evicted == 0) {
-        return;
+        graphics_cache.erase(it);
     }
     for (auto& [key, pipeline] : graphics_cache) {
         if (pipeline) {

@@ -11,6 +11,27 @@
 
 namespace VideoCommon {
 
+/// Driver memory a built graphics pipeline holds (measured on NVIDIA).
+constexpr u64 GraphicsPipelineBytes = 450'000;
+
+/// Graphics pipelines kept before any is evicted: 1/16 of host RAM.
+/// @param total_physical_memory Host RAM in bytes.
+constexpr size_t GraphicsPipelineBudget(u64 total_physical_memory) {
+    return static_cast<size_t>(total_physical_memory / 16 / GraphicsPipelineBytes);
+}
+
+/// How many graphics pipelines to evict, least recently used first.
+/// @param cached Graphics pipelines in the cache.
+/// @param stale  Pipelines among them unused for long enough to be evicted.
+/// @param budget GraphicsPipelineBudget of the host.
+/// @return Zero within the budget, else the excess, at most `stale`.
+constexpr size_t GraphicsPipelinesToEvict(size_t cached, size_t stale, size_t budget) {
+    if (cached <= budget) {
+        return 0;
+    }
+    return std::min(stale, cached - budget);
+}
+
 /// Attribute mask of a native vertex program, two bits per attribute as in
 /// FixedPipelineState::attribute_types.
 /// @param input_generic Components of each generic attribute in the program header's input map.
