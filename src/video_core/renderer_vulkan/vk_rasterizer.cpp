@@ -2469,17 +2469,7 @@ void RasterizerVulkan::WaitForIdle() {
         fence_manager.SignalOrdering();
         return;
     }
-    // This barrier carries no image layout transition, so it is legal inside an active render
-    // pass; ending the pass for it was costing Ocarina about 2,700 breaks a second, the same
-    // problem FragmentBarrier had (#161) before it was deferred. EDEN_NX2_WFI_IN_PASS=0 puts
-    // the break back.
-    static const bool barrier_in_pass = [] {
-        const char* value = std::getenv("EDEN_NX2_WFI_IN_PASS");
-        return value == nullptr || value[0] != '0';
-    }();
-    if (!barrier_in_pass) {
-        scheduler.RequestOutsideRenderPassOperationContext();
-    }
+    scheduler.RequestOutsideRenderPassOperationContext();
     scheduler.Record([flags](vk::CommandBuffer cmdbuf) {
         // Later work waits for the earlier work and sees its writes.
         static constexpr VkMemoryBarrier WFI_BARRIER{
