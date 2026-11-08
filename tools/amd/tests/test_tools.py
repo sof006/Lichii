@@ -409,6 +409,35 @@ class CompareTests(unittest.TestCase):
         self.assertIn("peak", output)
         self.assertIn("read more than 4 MB", output)
 
+    def test_reports_guest_swap_interval_switch(self):
+        """A steady drop to 30 fps may be the guest asking for interval 2."""
+        bundle = tempfile.mkdtemp(prefix="lichii-pace-test-")
+        with open(os.path.join(bundle, "frametimes.jsonl"), "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"t": 1.0, "frame_times": frame_times_payload()}) + "\n")
+        lines = [
+            "[  10.0] Service <Info> x:y: DKB frame present=100 word12=0x1003c "
+            "requested_interval=1 requested_hz=60 effective_interval=1 effective_hz=60 "
+            "switches=0 last_switch=0x0->0x0 cpu_frame_wall_ms=16.7\n",
+            "[  11.0] Service <Info> x:y: DKB frame present=160 word12=0x1003c "
+            "requested_interval=1 requested_hz=60 effective_interval=1 effective_hz=60 "
+            "switches=1 last_switch=0x1003c->0x2003c cpu_frame_wall_ms=33.3\n",
+            "[  12.0] Service <Info> x:y: DKB frame present=190 word12=0x2003c "
+            "requested_interval=2 requested_hz=60 effective_interval=2 effective_hz=30 "
+            "switches=0 last_switch=0x0->0x0 cpu_frame_wall_ms=33.3\n",
+        ]
+        with open(os.path.join(bundle, "eden_log.txt"), "w", encoding="utf-8") as handle:
+            handle.writelines(lines)
+
+        completed = subprocess.run([sys.executable, ANALYZE, bundle],
+                                   capture_output=True, text=True, timeout=60)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        output = completed.stdout
+        self.assertIn("Present pacing", output)
+        self.assertIn("requested swap interval", output)
+        self.assertIn("interval 2", output)
+        self.assertIn("0x1003c->0x2003c", output)
+        self.assertIn("game switching mode", output)
+
     def test_reports_pipeline_binary_state(self):
         """The analyser must say whether the driver binary cache engaged, and flag 'off'."""
         bundle = tempfile.mkdtemp(prefix="lichii-pb-test-")

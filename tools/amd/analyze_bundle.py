@@ -491,6 +491,51 @@ def analyse_io(path):
               f"(a hitch during one of these is loading, not rendering)")
 
 
+def analyse_present_pacing(path):
+    """EDEN_DKB_FRAME_TRACE also logs the present word the guest sends.
+
+    Word 12 is (swap interval << 16) | refresh rate, so interval 1 is 60 fps and
+    interval 2 is 30 fps. If the game asks for 30, a steady 60 falling to a
+    steady 30 is the guest switching mode, not the emulator throttling.
+    """
+    if not os.path.exists(path):
+        return
+    import re
+    field = re.compile(r"(\w+)=([^\s]+)")
+    samples = []
+    switches = []
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if "DKB frame present=" not in line:
+                continue
+            recorded = dict(field.findall(line))
+            samples.append(recorded)
+            switched = recorded.get("last_switch")
+            if switched and not switched.startswith("0x0->"):
+                switches.append(switched)
+    if not samples:
+        return
+
+    section("Present pacing (guest request)")
+    last = samples[-1]
+    print(f"  samples {len(samples)}   requested_hz {last.get('requested_hz')}"
+          f"   effective_hz {last.get('effective_hz')}")
+    intervals = {}
+    for sample in samples:
+        key = sample.get("requested_interval", "?")
+        intervals[key] = intervals.get(key, 0) + 1
+    print("  requested swap interval over the run: "
+          + ", ".join(f"{k}: {v} samples" for k, v in sorted(intervals.items())))
+    if switches:
+        print(f"  mode switches seen: {len(switches)}   last {switches[-1]}")
+    if "2" in intervals:
+        print("  -> the guest asked for interval 2 (30 fps): a steady drop to 30 is the game"
+              " switching mode, not the emulator")
+    elif intervals:
+        print("  -> the guest asked for interval 1 throughout: a drop to 30 is then"
+              " half-rate vsync on frames that miss the 60 Hz deadline")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("bundle", help="bundle directory or .zip")
@@ -529,6 +574,7 @@ def main():
     analyse_cache_delta(os.path.join(root, "shader-cache-delta.txt"))
     analyse_captures(os.path.join(root, "captures.jsonl"))
     analyse_frame_trace(os.path.join(root, "eden_log.txt"))
+    analyse_present_pacing(os.path.join(root, "eden_log.txt"))
     analyse_log(os.path.join(root, "eden_log.txt"))
     return 0
 
