@@ -137,21 +137,22 @@ void GpuSplit::MaybeStart(Core::System& system_) {
     // The front reads command lists straight from guest memory; a read that flushes the caches
     // first (safe DMA, accurate GPU) would touch back-owned state. The settings can change
     // mid-game: hand the engines back to the front (and start again when they allow it).
-    const bool safe_reads = Settings::IsDMALevelDefault() ? Settings::IsGPULevelHigh()
-                                                          : Settings::IsDMALevelSafe();
-    // TEST (EDEN_NX2_SPLIT_HIGH=1): also split at High GPU accuracy when the DMA reads are unsafe.
-    // Only with the macros on the back (EDEN_NX2_SPLIT=1): High's macro parameter refresh and
-    // texture cache checks then run there, and the front's semaphore view, which assumes payload
-    // reports land as the back runs them (not at High), stays off.
+    // TEST (EDEN_NX2_SPLIT_HIGH=1): also split at High GPU accuracy, with unsafe DMA reads unless
+    // DMA accuracy is Safe (Default follows the switch, not the GPU accuracy). Only with the
+    // macros on the back (EDEN_NX2_SPLIT=1): High's macro parameter refresh and texture cache
+    // checks then run there, and the front's semaphore view, which assumes payload reports land
+    // as the back runs them (not at High), stays off.
     static const bool split_high = mode == '1' && std::getenv("EDEN_NX2_SPLIT_HIGH") != nullptr;
     const bool high = Settings::IsGPULevelHigh();
+    const bool safe_reads = Settings::IsDMALevelDefault() ? high && !split_high
+                                                          : Settings::IsDMALevelSafe();
     const bool allowed = !safe_reads && (!high || split_high) &&
                          Settings::values.renderer_backend.GetValue() == Settings::RendererBackend::Vulkan;
     if (split_high && high && safe_reads && !active) {
         static std::atomic<bool> hinted{};
         if (!hinted.exchange(true)) {
-            LOG_WARNING(HW_GPU, "GPU thread split: EDEN_NX2_SPLIT_HIGH needs DMA accuracy Unsafe "
-                                "at High GPU accuracy; the split stays off");
+            LOG_WARNING(HW_GPU, "GPU thread split: EDEN_NX2_SPLIT_HIGH needs DMA accuracy Default "
+                                "or Unsafe; it is Safe, so the split stays off");
         }
     }
     if (active && !allowed) {
