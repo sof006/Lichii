@@ -135,6 +135,8 @@ def analyse_pipelines(path):
         return
     events = {}
     long_builds = []
+    keys = set()
+    stage_hashes = set()
     with open(path, encoding="utf-8", errors="replace") as handle:
         for line in handle:
             parts = line.split()
@@ -151,13 +153,19 @@ def analyse_pipelines(path):
                         ms = float(part[3:])
                     except ValueError:
                         pass
+                elif part[:3] in ("s1:", "s3:", "s5:"):
+                    stage_hashes.add(part)
             if kind == "BEGIN" and key:
                 events[key] = True
+                keys.add(key)
             elif kind == "END" and key:
                 events.pop(key, None)
                 if ms is not None:
                     long_builds.append(ms)
     section("Pipeline builds")
+    if keys:
+        print(f"distinct pipeline keys (as built): {len(keys)}")
+        print(f"distinct stage shaders: {len(stage_hashes)}")
     if long_builds:
         long_builds.sort()
         print(f"completed builds {len(long_builds)}   "

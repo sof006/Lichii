@@ -107,20 +107,28 @@ def read_profile(path):
 
 
 def read_pipelines(path):
-    out = {"count": 0, "over_50ms": 0, "max_ms": 0.0}
+    out = {"count": 0, "over_50ms": 0, "max_ms": 0.0, "keys": 0, "shaders": 0}
     if not os.path.exists(path):
         return out
     times = []
+    keys = set()
+    shaders = set()
     with open(path, encoding="utf-8", errors="replace") as handle:
         for line in handle:
-            if not line.startswith("END "):
+            if not line.startswith(("BEGIN ", "END ")):
                 continue
             for part in line.split():
-                if part.startswith("ms="):
+                if part.startswith("pipeline="):
+                    keys.add(part[len("pipeline="):])
+                elif part[:3] in ("s1:", "s3:", "s5:"):
+                    shaders.add(part)
+                elif part.startswith("ms="):
                     try:
                         times.append(float(part[3:]))
                     except ValueError:
                         pass
+    out["keys"] = len(keys)
+    out["shaders"] = len(shaders)
     if times:
         out["count"] = len(times)
         out["over_50ms"] = sum(1 for value in times if value > 50.0)
@@ -216,6 +224,8 @@ def collect(root):
     metrics["top_zone_ms"] = profile["top_zone_ms"]
 
     pipeline = read_pipelines(os.path.join(root, "pipeline_build.log"))
+    metrics["pipeline_keys"] = pipeline["keys"]
+    metrics["stage_shaders"] = pipeline["shaders"]
     metrics["builds"] = pipeline["count"]
     metrics["builds_over_50ms"] = pipeline["over_50ms"]
     metrics["build_max_ms"] = pipeline["max_ms"]
@@ -239,6 +249,8 @@ ROWS = [
     ("GPU thread host CPU (ms/s)", "cpu_busy_ms_s", "down"),
     ("acquires that blocked (%)", "acquire_wait_pct", "down"),
     ("pipeline builds completed", "builds", None),
+    ("distinct pipeline keys", "pipeline_keys", "down"),
+    ("distinct stage shaders", "stage_shaders", None),
     ("cache files built during play", "compiled_during_play", "down"),
     ("builds over 50 ms", "builds_over_50ms", "down"),
     ("slowest build (ms)", "build_max_ms", "down"),
