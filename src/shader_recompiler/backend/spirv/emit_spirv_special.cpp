@@ -135,6 +135,55 @@ void AlphaTest(EmitContext& ctx) {
     ctx.OpKill();
     ctx.AddLabel(true_label);
 }
+
+Id AnyNan(EmitContext& ctx, Id vector) {
+    Id any{};
+    for (u32 component = 0; component < 4; ++component) {
+        const Id value{ctx.OpCompositeExtract(ctx.F32[1], vector, component)};
+        const Id is_nan{ctx.OpIsNan(ctx.U1, value)};
+        any = component == 0 ? is_nan : ctx.OpLogicalOr(ctx.U1, any, is_nan);
+    }
+    return any;
+}
+
+void StoreIf(EmitContext& ctx, Id condition, Id pointer, Id value) {
+    const Id store_label{ctx.OpLabel()};
+    const Id merge_label{ctx.OpLabel()};
+    ctx.OpSelectionMerge(merge_label, spv::SelectionControlMask::MaskNone);
+    ctx.OpBranchConditional(condition, store_label, merge_label);
+    ctx.AddLabel(store_label);
+    ctx.OpStore(pointer, value);
+    ctx.OpBranch(merge_label);
+    ctx.AddLabel(merge_label);
+}
+
+/// RuntimeInfo::nan_guard: all four zero, which blending turns into no change
+void GuardFragColors(EmitContext& ctx) {
+    if (!ctx.runtime_info.nan_guard) {
+        return;
+    }
+    const Id zero{ctx.ConstantNull(ctx.F32[4])};
+    for (u32 index = 0; index < ctx.frag_color.size(); ++index) {
+        if (!Sirit::ValidId(ctx.frag_color[index]) ||
+            ctx.runtime_info.color_output_types[index] != AttributeType::Float) {
+            continue;
+        }
+        const Id color{ctx.OpLoad(ctx.F32[4], ctx.frag_color[index])};
+        StoreIf(ctx, AnyNan(ctx, color), ctx.frag_color[index], zero);
+    }
+}
+
+/// RuntimeInfo::nan_guard: outside every clip plane, so a primitive of such vertices is culled
+/// instead of stretched across the screen
+void GuardPosition(EmitContext& ctx) {
+    if (!ctx.runtime_info.nan_guard || !Sirit::ValidId(ctx.output_position)) {
+        return;
+    }
+    const Id two{ctx.Const(2.0f)};
+    const Id outside{ctx.ConstantComposite(ctx.F32[4], two, two, two, ctx.Const(1.0f))};
+    const Id position{ctx.OpLoad(ctx.F32[4], ctx.output_position)};
+    StoreIf(ctx, AnyNan(ctx, position), ctx.output_position, outside);
+}
 } // Anonymous namespace
 
 void EmitPrologue(EmitContext& ctx) {
@@ -194,10 +243,12 @@ void EmitEpilogue(EmitContext& ctx) {
         ConvertDepthMode(ctx);
     }
     if (ctx.stage == Stage::VertexB || ctx.stage == Stage::TessellationEval) {
+        GuardPosition(ctx);
         ScaleNoPerspectiveOutputs(ctx);
     }
     if (ctx.stage == Stage::Fragment) {
         AlphaTest(ctx);
+        GuardFragColors(ctx);
     }
 }
 
@@ -205,6 +256,7 @@ void EmitEmitVertex(EmitContext& ctx, const IR::Value& stream) {
     if (ctx.runtime_info.convert_depth_mode && !ctx.profile.support_native_ndc) {
         ConvertDepthMode(ctx);
     }
+    GuardPosition(ctx);
     const ScaledOutputs scaled{ScaleNoPerspectiveOutputs(ctx)};
     // Stream 0 is the plain EmitVertex, which needs no GeometryStreams capability.
     if (stream.IsImmediate() && stream.U32() == 0) {

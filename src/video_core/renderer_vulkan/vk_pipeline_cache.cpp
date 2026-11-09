@@ -19,6 +19,8 @@
 #include <span>
 #include <thread>
 #include <unordered_set>
+#include <string>
+#include <string_view>
 #include <vector>
 #include <bit>
 #include <numeric>
@@ -178,6 +180,56 @@ Shader::AttributeType AttributeType(const FixedPipelineState& state, size_t inde
         return Shader::AttributeType::UnsignedInt;
     }
     return Shader::AttributeType::Disabled;
+}
+
+// Ocarina of Time's lighting shaders start writing NaN after a while in a session (#849, #867;
+// cause unknown), which bloom spreads into walls of white or black across the view.
+constexpr u64 NanGuardDefaultTitle = 0x0400486024DEC000ULL;
+
+/// EDEN_NX2_NAN_GUARD: unset guards every shader of NanGuardDefaultTitle, 0 none, all every
+/// title's, or a comma-separated list of shader hashes only those.
+bool NanGuardShader(bool default_title, u64 hash) {
+    enum class Mode { Default, Off, All, List };
+    static Mode mode = Mode::Default;
+    static const std::vector<u64> hashes = [] {
+        std::vector<u64> result;
+        const char* const value = std::getenv("EDEN_NX2_NAN_GUARD");
+        if (value == nullptr) {
+            return result;
+        }
+        const std::string_view list{value};
+        if (list == "0" || list == "off") {
+            mode = Mode::Off;
+        } else if (list == "all") {
+            mode = Mode::All;
+        } else {
+            mode = Mode::List;
+            size_t start = 0;
+            while (start < list.size()) {
+                const size_t end = std::min(list.find(',', start), list.size());
+                const std::string item{list.substr(start, end - start)};
+                char* parsed_end = nullptr;
+                const u64 parsed = std::strtoull(item.c_str(), &parsed_end, 16);
+                if (!item.empty() && *parsed_end == '\0') {
+                    result.push_back(parsed);
+                }
+                start = end + 1;
+            }
+        }
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_NAN_GUARD={}: {} shader hashes", list, result.size());
+        return result;
+    }();
+    switch (mode) {
+    case Mode::Default:
+        return default_title;
+    case Mode::Off:
+        return false;
+    case Mode::All:
+        return true;
+    case Mode::List:
+        return std::ranges::find(hashes, hash) != hashes.end();
+    }
+    return false;
 }
 
 Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> programs,
@@ -1006,6 +1058,7 @@ ComputePipeline* PipelineCache::CurrentComputePipeline(u64& native_key) {
 
 void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading,
                                       const VideoCore::DiskResourceLoadCallback& callback) {
+    nan_guard_title = title_id == NanGuardDefaultTitle;
     if (title_id == 0) {
         return;
     }
@@ -2514,6 +2567,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
             }
         }
         ConvertLegacyToGeneric(program, runtime_info);
+        runtime_info.nan_guard = NanGuardShader(nan_guard_title, key.unique_hashes[index]);
         // EDEN_NX2_MESH_EMULATION_DUMP=<dir>: write the emulation's vertex shader for spirv-val.
         // (Emitting the mesh program a second time here to dump its compute shader crashed the
         // build that followed, so only the vertex shader is written.)

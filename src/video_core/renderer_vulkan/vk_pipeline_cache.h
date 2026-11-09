@@ -262,6 +262,8 @@ private:
     VideoCore::ShaderNotify& shader_notify;
     bool use_asynchronous_shaders{};
     bool use_vulkan_pipeline_cache{};
+    /// The title's shaders get Shader::RuntimeInfo::nan_guard by default (NanGuardShader)
+    bool nan_guard_title{};
     /// The pipelines' builds, the prebuild and the precache. Declared before the pipelines, whose
     /// builds it runs.
     std::optional<VideoCommon::ShaderJobScheduler> shader_jobs;

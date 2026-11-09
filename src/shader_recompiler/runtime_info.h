@@ -98,6 +98,9 @@ struct RuntimeInfo {
 
     bool convert_depth_mode{};
     bool force_early_z{};
+    /// A float color output with a NaN component writes zero in all four, and a NaN position
+    /// moves the vertex out of the view volume, so later passes (bloom) can't spread it.
+    bool nan_guard{};
 
     TessPrimitive tess_primitive{};
     TessSpacing tess_spacing{};
