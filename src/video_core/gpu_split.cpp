@@ -158,9 +158,23 @@ void GpuSplit::MaybeStart(Core::System& system_) {
         return value == nullptr || value[0] != '0';
     }();
     const bool high = Settings::IsGPULevelHigh();
-    const char mode = mode_value != nullptr ? mode_value[0] : (high && split_high_wanted ? '1' : '2');
+    const char requested = mode_value != nullptr ? mode_value[0] : '2';
+    // Mode 2 keeps the macros on the front, which High can't use: High runs mode 1 instead, also
+    // when EDEN_NX2_SPLIT=2 asks for mode 2 (a switch meant for lower accuracy).
+    const char mode = high && split_high_wanted && requested == '2' ? '1' : requested;
     const bool wanted = mode == '1' || mode == '2';
-    if (!wanted || !Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
+    if (!Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
+        return;
+    }
+    if (!wanted || (high && !split_high_wanted)) {
+        static std::atomic<bool> reported{};
+        if (!active && !reported.exchange(true)) {
+            LOG_INFO(HW_GPU, "GPU thread split: off ({})",
+                     !wanted ? fmt::format("EDEN_NX2_SPLIT={}", mode_value)
+                             : std::string{"EDEN_NX2_SPLIT_HIGH=0 at High GPU accuracy"});
+        }
+    }
+    if (!wanted) {
         return;
     }
     // The front reads command lists straight from guest memory; a read that flushes the caches
