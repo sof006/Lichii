@@ -1145,6 +1145,14 @@ bool Device::ComputeIsOptimalAstcSupported() const {
     return true;
 }
 
+bool Device::DriverCachesShadersUnlessCaptured() const noexcept {
+    static const bool keep_blobs = [] {
+        const char* value = std::getenv("EDEN_NX2_DRIVER_BLOBS");
+        return value != nullptr && value[0] == '1';
+    }();
+    return properties.driver.driverID == VK_DRIVER_ID_MESA_RADV && !keep_blobs;
+}
+
 bool Device::TestDepthStencilBlits(VkFormat format) const {
     static constexpr VkFormatFeatureFlags required_features =
         VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
@@ -1897,7 +1905,8 @@ void Device::RemoveUnsuitableExtensions() {
     }
     extensions.pipeline_binary =
         features.pipeline_binary.pipelineBinaries && extensions.maintenance5 &&
-        !properties.pipeline_binary.pipelineBinaryPrefersInternalCache && !DriverCachesPipelines();
+        !properties.pipeline_binary.pipelineBinaryPrefersInternalCache && !DriverCachesPipelines() &&
+        !DriverCachesShadersUnlessCaptured();
     RemoveExtensionFeatureIfUnsuitable(extensions.pipeline_binary, features.pipeline_binary,
                                        VK_KHR_PIPELINE_BINARY_EXTENSION_NAME);
 

@@ -1241,6 +1241,11 @@ FN_MAX_LIMIT_LIST
                properties.driver.driverID == VK_DRIVER_ID_AMD_PROPRIETARY;
     }
 
+    /// RADV keeps a disk cache of its own too, but skips it for builds that capture binaries
+    /// (radv_pipeline_skip_shaders_cache): the binary store would replace it with one trimmed
+    /// at exit and discarded at each Mesa update. EDEN_NX2_DRIVER_BLOBS=1 keeps the store.
+    bool DriverCachesShadersUnlessCaptured() const noexcept;
+
     bool IsMoltenVK() const noexcept {
         return properties.driver.driverID == VK_DRIVER_ID_MOLTENVK;
     }
