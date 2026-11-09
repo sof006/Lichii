@@ -134,6 +134,7 @@ add_executable(tests
     video_core/spirv_nan_safe_min_max.cpp
     video_core/virtual_range_cache.cpp
     video_core/ocarina_upscale.cpp
+    common/appimage_shader_dir.cpp
     common/bit_field.cpp
     common/bit_util.cpp
     common/cityhash.cpp
