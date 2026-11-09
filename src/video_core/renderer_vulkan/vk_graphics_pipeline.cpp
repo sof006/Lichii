@@ -892,15 +892,18 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
 
     const auto config_stage{[&](size_t stage) LAMBDA_FORCEINLINE {
         const Shader::Info& info{stage_infos[stage]};
-        buffer_cache.UnbindGraphicsStorageBuffers(stage);
-        if constexpr (Spec::has_storage_buffers) {
-            size_t ssbo_index{};
-            for (const auto& desc : info.storage_buffers_descriptors) {
-                ASSERT(desc.count == 1);
-                buffer_cache.BindGraphicsStorageBuffer(stage, ssbo_index, desc.cbuf_index,
-                                                       desc.cbuf_offset, desc.is_written,
-                                                       desc.indirect_offset);
-                ++ssbo_index;
+        {
+            const Profile::FineScope storage_scope{Profile::Zone::StorageBindings};
+            buffer_cache.UnbindGraphicsStorageBuffers(stage);
+            if constexpr (Spec::has_storage_buffers) {
+                size_t ssbo_index{};
+                for (const auto& desc : info.storage_buffers_descriptors) {
+                    ASSERT(desc.count == 1);
+                    buffer_cache.BindGraphicsStorageBuffer(stage, ssbo_index, desc.cbuf_index,
+                                                           desc.cbuf_offset, desc.is_written,
+                                                           desc.indirect_offset);
+                    ++ssbo_index;
+                }
             }
         }
         const auto& cbufs{maxwell3d->state.shader_stages[stage].const_buffers};
@@ -1001,6 +1004,7 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
             config_stage(4);
         }
     }
+    Profile::AddFine(Profile::FineCounter::TextureHandles, views.size());
     ASSERT(views.size() == num_image_elements);
     ASSERT(samplers.size() == num_textures);
     if (resolve_in_full) {
@@ -1181,6 +1185,7 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
     {
         Profile::Scope scope{Profile::Zone::UpdateBuffers};
         buffer_cache.UpdateGraphicsBuffers(is_indexed);
+        const Profile::FineScope geometry_scope{Profile::Zone::GeometryBuffers};
         buffer_cache.BindHostGeometryBuffers(is_indexed);
     }
 
@@ -1345,7 +1350,9 @@ bool GraphicsPipeline::ConfigureDelta(bool is_indexed) {
         if (replay_images) {
             Profile::Scope scope{Profile::Zone::PushDescriptors};
             const auto [first, count] = kept_image_ranges[stage];
-            guest_descriptor_queue.AddEntries({kept_image_entries.data() + first, count});
+            if (count != 0) {
+                guest_descriptor_queue.AddEntries({kept_image_entries.data() + first, count});
+            }
         } else {
             Profile::Scope scope{Profile::Zone::PushDescriptors};
             if (library_cache && stage == NUM_STAGES - 1) {

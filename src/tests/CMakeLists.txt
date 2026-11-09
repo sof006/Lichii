@@ -135,6 +135,7 @@ add_executable(tests
     video_core/virtual_range_cache.cpp
     video_core/ocarina_upscale.cpp
     common/appimage_shader_dir.cpp
+    video_core/fsr4_support.cpp
     common/bit_field.cpp
     common/bit_util.cpp
     common/cityhash.cpp
@@ -193,6 +194,7 @@ add_executable(tests
     video_core/turing_macro_effects.cpp
     video_core/turing_macro_ram.cpp
     video_core/uniform_stream_reuse.cpp
+    video_core/upload_order.cpp
     video_core/usage_tracker.cpp
     video_core/shader_invalidation.cpp
     video_core/descriptor_table.cpp

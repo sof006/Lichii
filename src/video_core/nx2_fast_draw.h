@@ -17,9 +17,11 @@ class MemoryManager;
 
 /// A draw that follows a draw of the same pipeline with only light state changes in between takes
 /// the delta path. It keeps the previous draw's pipeline, image views, samplers and texture buffer
-/// bindings, and resolves and binds every buffer (index, vertex, uniform, storage, texture) again
-/// as a full resolve does, so guest memory written without a notification is streamed as in a
-/// full resolve.
+/// bindings. Buffers are resolved and bound again, except small streamed uniforms whose ranges
+/// were not rebound or written: those can keep the previous stream allocation in the same command
+/// buffer. This assumes no unsynchronized guest CPU writes unknown to the caches between draws;
+/// EDEN_NX2_UBO_KEEP_VERIFY checks that assumption. Kept image descriptors and rescaling words are
+/// replayed while the views remain valid; EDEN_NX2_DELTA_DESCRIPTORS_VERIFY checks the replay.
 /// Light changes are draw parameters, index buffer and vertex stream registers, constant buffer
 /// binds and inline constant buffer data (collected in g_delta: the rasterizer resolves in full
 /// when they reach the pipeline's texture handles at their GPU addresses or through another

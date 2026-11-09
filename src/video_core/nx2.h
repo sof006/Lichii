@@ -479,46 +479,32 @@ inline u64 Nx2SemaphoreMirror(u64 address) {
 /// Channels suspended on a semaphore acquire. A console channel polls and sees every release;
 /// Eden writes releases in bursts when fences signal and resumes waiters only between command
 /// lists, so an acquire-equal could miss its value. Writes latch the waiters they satisfy.
-/// The channels' acquires (Add, Remove, Latched) all run on the GPU thread (the split's front);
-/// writes (OnWrite) come from the thread that runs the engines. Latched takes no lock: a waiter
-/// polls its own slot, which only its own thread fills and empties.
 class Nx2SemaphoreWaiters {
 public:
     // Puller GpuSemaphoreOperation values.
     static constexpr u32 AcquireEqual = 0x1;
     static constexpr u32 AcquireGequal = 0x4;
     static constexpr u32 AcquireMask = 0x8;
-    /// One per channel suspended at once.
-    static constexpr size_t MaxWaiters = 64;
+    /// TEST (EDEN_NX2_ACQUIRE_STATS): the writer that latched a waiter.
+    enum class Source : u8 {
+        Unknown,
+        PayloadRelease,
+        QueryResult,
+        QmdReduction,
+        QmdMax,
+        Count,
+    };
 
     static Nx2SemaphoreWaiters& Get() {
         static Nx2SemaphoreWaiters waiters;
         return waiters;
     }
 
-    /// False, and nothing is latched for owner, when MaxWaiters others wait already.
     bool Add(const void* owner, u64 device_address, u32 value, u32 operation) {
         std::scoped_lock lk{mutex};
-        Slot* free_slot = nullptr;
-        for (Slot& slot : slots) {
-            const void* const current = slot.owner.load(std::memory_order_relaxed);
-            if (current == owner) {
-                slot.owner.store(nullptr, std::memory_order_relaxed);
-                count.fetch_sub(1, std::memory_order_relaxed);
-            }
-            if ((current == nullptr || current == owner) && free_slot == nullptr) {
-                free_slot = &slot;
-            }
-        }
-        if (free_slot == nullptr) {
-            return false;
-        }
-        free_slot->address = device_address;
-        free_slot->value = value;
-        free_slot->operation = operation;
-        free_slot->latched.store(false, std::memory_order_relaxed);
-        free_slot->owner.store(owner, std::memory_order_relaxed);
-        count.fetch_add(1, std::memory_order_release);
+        std::erase_if(waiters, [owner](const Waiter& w) { return w.owner == owner; });
+        waiters.push_back({owner, device_address, value, operation, false, Source::Unknown});
+        count.store(waiters.size(), std::memory_order_release);
         return true;
     }
 
@@ -527,65 +513,68 @@ public:
             return;
         }
         std::scoped_lock lk{mutex};
-        for (Slot& slot : slots) {
-            if (slot.owner.load(std::memory_order_relaxed) == owner) {
-                slot.owner.store(nullptr, std::memory_order_relaxed);
-                count.fetch_sub(1, std::memory_order_relaxed);
-            }
-        }
+        std::erase_if(waiters, [owner](const Waiter& w) { return w.owner == owner; });
+        count.store(waiters.size(), std::memory_order_release);
     }
 
-    [[nodiscard]] bool Latched(const void* owner) const {
+    [[nodiscard]] bool Latched(const void* owner) {
         if (count.load(std::memory_order_acquire) == 0) {
             return false;
         }
-        for (const Slot& slot : slots) {
-            if (slot.owner.load(std::memory_order_relaxed) == owner) {
-                // Acquire: what the engine wrote before the latch is visible after it.
-                return slot.latched.load(std::memory_order_acquire);
+        std::scoped_lock lk{mutex};
+        return std::ranges::any_of(waiters,
+                                   [owner](const Waiter& w) { return w.owner == owner && w.latched; });
+    }
+
+    [[nodiscard]] Source LatchSource(const void* owner) {
+        std::scoped_lock lk{mutex};
+        for (const Waiter& w : waiters) {
+            if (w.owner == owner && w.latched) {
+                return w.source;
             }
         }
-        return false;
+        return Source::Unknown;
     }
 
     /// A GPU write of value to the u32 at device_address.
-    void OnWrite(u64 device_address, u32 value) {
+    void OnWrite(u64 device_address, u32 value, Source source = Source::Unknown) {
         if (count.load(std::memory_order_acquire) == 0) {
             return;
         }
         std::scoped_lock lk{mutex};
-        for (Slot& slot : slots) {
-            if (slot.owner.load(std::memory_order_relaxed) != nullptr &&
-                slot.address == device_address && Matches(slot, value)) {
-                slot.latched.store(true, std::memory_order_release);
+        for (auto& w : waiters) {
+            if (w.address == device_address && !w.latched && Matches(w, value)) {
+                w.latched = true;
+                w.source = source;
             }
         }
     }
 
 private:
-    struct Slot {
-        std::atomic<const void*> owner{};
-        u64 address{};
-        u32 value{};
-        u32 operation{};
-        std::atomic<bool> latched{};
+    struct Waiter {
+        const void* owner;
+        u64 address;
+        u32 value;
+        u32 operation;
+        bool latched;
+        Source source;
     };
 
-    static bool Matches(const Slot& slot, u32 current) {
-        switch (slot.operation) {
+    static bool Matches(const Waiter& w, u32 current) {
+        switch (w.operation) {
         case AcquireEqual:
-            return current == slot.value;
+            return current == w.value;
         case AcquireGequal:
-            return current >= slot.value;
+            return current >= w.value;
         case AcquireMask:
-            return (current & slot.value) != 0;
+            return (current & w.value) != 0;
         default:
             return false;
         }
     }
 
-    std::mutex mutex; ///< Held to fill, empty and latch slots
-    std::array<Slot, MaxWaiters> slots{};
+    std::mutex mutex;
+    std::vector<Waiter> waiters;
     std::atomic<size_t> count{};
 };
 

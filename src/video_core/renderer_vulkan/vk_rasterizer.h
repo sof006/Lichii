@@ -108,6 +108,7 @@ public:
                      VideoCommon::CacheType which = VideoCommon::CacheType::All) override;
     void FlushRegionForRead(DAddr addr, u64 size) override;
     void FinishRead(DAddr addr, u64 size) override;
+    void TraceRead(VideoCommon::ReadTrace::Read& read, VideoCommon::ReadTrace::Step step) override;
     bool NoteReportPending(DAddr addr, u64 size) override;
     void FinishReport(DAddr addr, u64 size) override;
     GpuWrittenList ReadGpuWrittenCommandList(DAddr addr, std::span<u8> out, bool past_sync,
@@ -115,6 +116,14 @@ public:
     bool IsGpuTickDone(u64 tick) override;
     void NoteGpuWrittenCommandListSynced(DAddr page) override;
     void FlushGpuWrittenCommandListPages(std::span<const DAddr> pages) override;
+    bool Nx2ListSlotsSupported() const override;
+    std::optional<u32> Nx2AcquireListSlot() override;
+    void Nx2ReleaseListSlot(u32 slot) override;
+    void Nx2SnapshotListWords(DAddr device_addr, u32 count, u32 slot) override;
+    void Nx2NoteOwedListWord(DAddr device_addr, u32 value) override;
+    void Nx2NoteInlineQmdGrid(DAddr device_addr, u32 x, u32 y, u32 z) override;
+    void Nx2ReadListSlots(std::span<const u32> slots, std::span<u32> words) override;
+    void Nx2CheckListSlot(u32 slot, std::span<const u32> words) override; // TEST
     bool MustFlushRegion(DAddr addr, u64 size,
                          VideoCommon::CacheType which = VideoCommon::CacheType::All) override;
     VideoCore::RasterizerDownloadArea GetFlushArea(DAddr addr, u64 size) override;
@@ -253,6 +262,11 @@ private:
     void TracePendingCpuWrites(bool compute, std::span<const u64> shader_hashes);
     bool OcarinaTemporalEnabled() const;
     void TrackOcarinaCamera();
+    /// Offsets the viewport of Ocarina's scene draws (depth-tested, into the scene depth) by a
+    /// sub-pixel amount that changes every frame while FSR replaces the game's upscale, so FSR
+    /// gets new sample positions each frame (the game renders without jitter). The offset goes to
+    /// FSR with the frame.
+    void UpdateOcarinaJitter();
     void TrackOcarinaActor(u64 shader_hash, bool is_indexed, bool is_indirect);
     bool TryOcarinaUpscale(const ComputePipeline& pipeline, bool replace);
     void ReadOcarinaActor(struct OcarinaActorMesh& mesh);
@@ -308,6 +322,10 @@ private:
     const char* oot_fallback_reason{};
     u32 oot_fallback_repeats{};
     std::optional<u64> oot_dlss_frame;
+    std::array<f32, 2> oot_jitter_applied{}; ///< in the viewport state now (render pixels)
+    std::array<f32, 2> oot_jitter_offset{};  ///< what oot_jitter_frame's scene draws used
+    std::optional<u64> oot_jitter_frame;
+    u32 oot_jitter_phases{8}; ///< Halton sequence length for the last FSR frame's scale
     std::optional<u64> oot_4k_scene_frame;
     VkImage oot_4k_guest_present{};
     std::optional<u64> oot_effects_frame;
