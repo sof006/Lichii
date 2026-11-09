@@ -111,6 +111,7 @@ public:
     void Reinitialize(fs::path eden_path = {}) {
         fs::path eden_path_cache;
         fs::path eden_path_config;
+        appimage_shader_dir.clear();
 #ifdef _WIN32
         // User directory takes priority over global %AppData% directory
         eden_path = GetExeDirectory() / PORTABLE_DIR;
@@ -137,6 +138,7 @@ public:
             eden_path = GetDataDirectory("XDG_DATA_HOME") / EDEN_DIR;
             eden_path_cache = GetDataDirectory("XDG_CACHE_HOME") / EDEN_DIR;
             eden_path_config = GetDataDirectory("XDG_CONFIG_HOME") / EDEN_DIR;
+            appimage_shader_dir = AppImageShaderDir();
         } else {
             eden_path_cache = eden_path / CACHE_DIR;
             eden_path_config = eden_path / CONFIG_DIR;
@@ -173,7 +175,9 @@ public:
         GenerateEdenPath(EdenPath::ConfigDir, eden_path_config);
         // cache
         GenerateEdenPath(EdenPath::CacheDir, eden_path_cache);
-        GenerateEdenPath(EdenPath::ShaderDir, eden_path_cache / SHADER_DIR);
+        home_shader_dir = eden_path_cache / SHADER_DIR;
+        GenerateEdenPath(EdenPath::ShaderDir,
+                         appimage_shader_dir.empty() ? home_shader_dir : appimage_shader_dir);
 #ifdef _WIN32
         GenerateLegacyPath(EmuPath::RyujinxDir, GetAppDataRoamingDirectory() / RYUJINX_DIR);
 #else
@@ -200,6 +204,33 @@ private:
         SetLegacyPathImpl(legacy_path, new_path);
     }
 
+    static fs::path AppImageShaderDir() {
+#if defined(__linux__) && !defined(__ANDROID__)
+        const char* appimage = std::getenv("APPIMAGE");
+        const char* enabled = std::getenv("LICHII_APPIMAGE_SHADERS");
+        if (appimage == nullptr || appimage[0] != '/' || (enabled != nullptr && enabled[0] == '0')) {
+            return {};
+        }
+        const fs::path folder = fs::path{appimage}.parent_path();
+        if (folder.empty() || access(folder.c_str(), W_OK) != 0) {
+            return {};
+        }
+        const fs::path dir = folder / "lichii-shaders";
+        std::error_code error;
+        if (fs::exists(dir / USE_HOME_SHADER_DIR_MARKER, error)) {
+            return {};
+        }
+        return dir;
+#else
+        return {};
+#endif
+    }
+
+public:
+    fs::path appimage_shader_dir;
+    fs::path home_shader_dir;
+
+private:
     ::Common::unordered_map<EdenPath, fs::path> eden_paths;
     ::Common::unordered_map<EmuPath, fs::path> legacy_paths;
 };
@@ -291,6 +322,39 @@ const fs::path& GetEdenPath(EdenPath eden_path) {
 
 const std::filesystem::path& GetLegacyPath(EmuPath legacy_path) {
     return PathManagerImpl::GetInstance().GetLegacyPathImpl(legacy_path);
+}
+
+bool IsShaderDirBesideAppImage() {
+    return !PathManagerImpl::GetInstance().appimage_shader_dir.empty();
+}
+
+void UseHomeShaderDir() {
+    auto& manager = PathManagerImpl::GetInstance();
+    manager.appimage_shader_dir.clear();
+    manager.SetEdenPathImpl(EdenPath::ShaderDir, manager.home_shader_dir);
+}
+
+const fs::path& GetHomeShaderDir() {
+    return PathManagerImpl::GetInstance().home_shader_dir;
+}
+
+fs::path GetDriverShaderCacheDir() {
+    const auto& dir = PathManagerImpl::GetInstance().appimage_shader_dir;
+    return dir.empty() ? fs::path{} : dir / "mesa";
+}
+
+void ConfigureDriverShaderCache() {
+#if defined(__linux__) && !defined(__ANDROID__)
+    const auto dir = GetDriverShaderCacheDir();
+    if (dir.empty()) {
+        return;
+    }
+    // Mesa adds its own folder name (mesa_shader_cache_db) below this one.
+    if (setenv("MESA_SHADER_CACHE_DIR", dir.c_str(), 0) == 0) {
+        LOG_INFO(Common_Filesystem, "Mesa shader cache folder: {}",
+                 std::getenv("MESA_SHADER_CACHE_DIR"));
+    }
+#endif
 }
 
 std::string GetEdenPathString(EdenPath eden_path) {

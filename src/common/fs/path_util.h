@@ -241,6 +241,33 @@ void SetAppDirectory(const std::string& app_directory);
 [[nodiscard]] const std::filesystem::path& GetLegacyPath(EmuPath legacy_path);
 
 /**
+ * Shader caches live in a "lichii-shaders" folder beside the AppImage when Lichii runs from a
+ * writable folder as an AppImage and no portable user folder is in use
+ * (LICHII_APPIMAGE_SHADERS=0 keeps the usual cache folder).
+ *
+ * @returns Whether ShaderDir is beside the AppImage.
+ */
+[[nodiscard]] bool IsShaderDirBesideAppImage();
+
+/// A file of this name in the folder beside the AppImage keeps the usual cache folder.
+inline constexpr const char* USE_HOME_SHADER_DIR_MARKER = "use-home-folder";
+
+/// Switches ShaderDir back to GetHomeShaderDir() for this run.
+void UseHomeShaderDir();
+
+/// The shader folder Lichii uses when it is not beside the AppImage.
+[[nodiscard]] const std::filesystem::path& GetHomeShaderDir();
+
+/// Mesa's own shader cache folder (MESA_SHADER_CACHE_DIR) used beside the AppImage, or empty.
+[[nodiscard]] std::filesystem::path GetDriverShaderCacheDir();
+
+/**
+ * Points Mesa's shader cache at GetDriverShaderCacheDir() unless the user set
+ * MESA_SHADER_CACHE_DIR. Call before the Vulkan driver is loaded.
+ */
+void ConfigureDriverShaderCache();
+
+/**
  * Gets the filesystem path associated with the EdenPath enum as a UTF-8 encoded std::string.
  *
  * @param eden_path EdenPath enum

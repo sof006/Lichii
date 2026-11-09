@@ -6,6 +6,7 @@
 #include "common/fs/fs_paths.h"
 #include "common/fs/path_util.h"
 #include "nx2_switches.h"
+#include "shader_cache_move.h"
 #include "startup_checks.h"
 
 #if YUZU_ROOM
@@ -204,6 +205,9 @@ int main(int argc, char* argv[]) {
     // Qt changes the locale and causes issues in float conversion using std::to_string() when
     // generating shaders
     setlocale(LC_ALL, "C");
+
+    // Before anything opens the shader caches.
+    ShaderCacheMove::OfferMove(nullptr);
 
     MainWindow main_window{has_broken_vulkan};
     // After settings have been loaded by GMainWindow, apply the filter

@@ -149,6 +149,7 @@ std::shared_ptr<Common::DynamicLibrary> OpenLibrary(
         LOG_INFO(Render_Vulkan, "Mesa shader cache limit: {}",
                  std::getenv("MESA_SHADER_CACHE_MAX_SIZE"));
     }
+    Common::FS::ConfigureDriverShaderCache();
 #endif
     std::string filename = Common::DynamicLibrary::GetVersionedFilename("vulkan", 1);
     LOG_DEBUG(Render_Vulkan, "Trying Vulkan library: {}", filename);
