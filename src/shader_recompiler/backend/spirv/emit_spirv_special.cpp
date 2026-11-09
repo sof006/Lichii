@@ -157,22 +157,6 @@ void StoreIf(EmitContext& ctx, Id condition, Id pointer, Id value) {
     ctx.AddLabel(merge_label);
 }
 
-/// RuntimeInfo::nan_guard: all four zero, which blending turns into no change
-void GuardFragColors(EmitContext& ctx) {
-    if (!ctx.runtime_info.nan_guard) {
-        return;
-    }
-    const Id zero{ctx.ConstantNull(ctx.F32[4])};
-    for (u32 index = 0; index < ctx.frag_color.size(); ++index) {
-        if (!Sirit::ValidId(ctx.frag_color[index]) ||
-            ctx.runtime_info.color_output_types[index] != AttributeType::Float) {
-            continue;
-        }
-        const Id color{ctx.OpLoad(ctx.F32[4], ctx.frag_color[index])};
-        StoreIf(ctx, AnyNan(ctx, color), ctx.frag_color[index], zero);
-    }
-}
-
 /// RuntimeInfo::nan_guard: outside every clip plane, so a primitive of such vertices is culled
 /// instead of stretched across the screen
 void GuardPosition(EmitContext& ctx) {
@@ -248,7 +232,6 @@ void EmitEpilogue(EmitContext& ctx) {
     }
     if (ctx.stage == Stage::Fragment) {
         AlphaTest(ctx);
-        GuardFragColors(ctx);
     }
 }
 

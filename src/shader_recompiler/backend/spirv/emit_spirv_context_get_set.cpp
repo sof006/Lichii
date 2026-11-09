@@ -490,6 +490,12 @@ void EmitSetPatch(EmitContext& ctx, IR::Patch patch, Id value) {
 void EmitSetFragColor(EmitContext& ctx, u32 index, u32 component, Id value) {
     const Id component_id{ctx.Const(component)};
     const AttributeType type{ctx.runtime_info.color_output_types[index]};
+    if (ctx.runtime_info.nan_guard && type != AttributeType::UnsignedInt &&
+        type != AttributeType::SignedInt) {
+        // Only the NaN component: a whole-color check also saw components the render target
+        // drops, and blanked Ocarina's shadow quads
+        value = ctx.OpSelect(ctx.F32[1], ctx.OpIsNan(ctx.U1, value), ctx.f32_zero_value, value);
+    }
     if (type == AttributeType::Float) {
         const Id pointer{ctx.OpAccessChain(ctx.output_f32, ctx.frag_color.at(index), component_id)};
         ctx.OpStore(pointer, value);

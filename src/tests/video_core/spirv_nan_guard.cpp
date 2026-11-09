@@ -81,7 +81,11 @@ TEST_CASE("NaN guard checks fragment colors and positions only when asked",
         const std::vector<u32> guarded = Emit(stage, true);
         CHECK(CountOps(plain, spv::Op::OpIsNan) == 0);
         CHECK(CountOps(guarded, spv::Op::OpIsNan) == 4);
+        // Fragment: a select per stored component. Position: one branch for the whole vector.
+        const bool fragment = stage == Stage::Fragment;
+        CHECK(CountOps(guarded, spv::Op::OpSelect) ==
+              CountOps(plain, spv::Op::OpSelect) + (fragment ? 4 : 0));
         CHECK(CountOps(guarded, spv::Op::OpSelectionMerge) ==
-              CountOps(plain, spv::Op::OpSelectionMerge) + 1);
+              CountOps(plain, spv::Op::OpSelectionMerge) + (fragment ? 0 : 1));
     }
 }
