@@ -1748,6 +1748,27 @@ void Device::RemoveUnsuitableExtensions() {
         LOG_WARNING(Render_Vulkan, "EDEN_NX2_FORCE_MESH_FALLBACK: VK_EXT_mesh_shader disabled");
         extensions.mesh_shader = false;
     }
+    // The Mesh Shaders setting. Automatic leaves the extension disabled on AMD drivers: native
+    // task/mesh draws hang AMD GPUs (#316, #670, #672, #871). RADV resets the GPU on RX 6000, 7000
+    // and 9000 cards (Mesa 26.0 to 27.0-devel; 26.2.6 still hangs, though it recovers more often),
+    // and AMD's own driver times out on the Radeon 780M. The compute fallback avoids the hangs, but
+    // it can be slower in scenes full of foliage and skips the mesh programs it can't run
+    // (per-primitive outputs, primitives other than triangles, layered output). Native keeps the
+    // extension, for a setup that no longer hangs; Compute disables it on every device.
+    const Settings::MeshShaderMode mesh_mode = Settings::values.mesh_shaders.GetValue();
+    const VkDriverId mesh_driver = properties.driver.driverID;
+    const bool amd_mesh_driver = mesh_driver == VK_DRIVER_ID_MESA_RADV ||
+                                 mesh_driver == VK_DRIVER_ID_AMD_PROPRIETARY ||
+                                 mesh_driver == VK_DRIVER_ID_AMD_OPEN_SOURCE;
+    if (extensions.mesh_shader && mesh_mode == Settings::MeshShaderMode::Compute) {
+        LOG_INFO(Render_Vulkan, "Mesh Shaders setting: task/mesh draws use the compute fallback");
+        extensions.mesh_shader = false;
+    } else if (extensions.mesh_shader && mesh_mode == Settings::MeshShaderMode::Automatic &&
+               amd_mesh_driver) {
+        LOG_INFO(Render_Vulkan, "AMD driver: task/mesh draws use the compute fallback, because "
+                                "native mesh draws hang the GPU (Mesh Shaders: Native keeps them)");
+        extensions.mesh_shader = false;
+    }
     RemoveExtensionFeatureIfUnsuitable(extensions.mesh_shader, features.mesh_shader,
                                        VK_EXT_MESH_SHADER_EXTENSION_NAME);
 
