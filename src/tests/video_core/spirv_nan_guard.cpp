@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <span>
+#include <string>
 #include <vector>
 #include <catch2/catch_test_macros.hpp>
 #define SPV_ENABLE_UTILITY_CODE
@@ -42,7 +46,17 @@ std::vector<u32> Emit(Stage stage, bool nan_guard) {
     runtime_info.color_output_types[0] = AttributeType::Float;
     runtime_info.nan_guard = nan_guard;
     Backend::Bindings bindings;
-    return Backend::SPIRV::EmitSPIRV(profile, runtime_info, program, bindings);
+    std::vector<u32> code = Backend::SPIRV::EmitSPIRV(profile, runtime_info, program, bindings);
+    // EDEN_NAN_GUARD_TEST_OUTPUT=<dir>: write the modules for spirv-val.
+    if (const char* directory = std::getenv("EDEN_NAN_GUARD_TEST_OUTPUT")) {
+        std::filesystem::create_directories(directory);
+        const auto name = std::to_string(static_cast<u32>(stage)) + "-" +
+                          std::to_string(nan_guard) + ".spv";
+        std::ofstream file{std::filesystem::path{directory} / name, std::ios::binary};
+        file.write(reinterpret_cast<const char*>(code.data()),
+                   static_cast<std::streamsize>(code.size() * sizeof(u32)));
+    }
+    return code;
 }
 
 size_t CountOps(std::span<const u32> code, spv::Op wanted) {
