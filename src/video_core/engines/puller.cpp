@@ -136,7 +136,8 @@ bool ReleasesLandAtOnce() {
 // included.
 bool ViewApplies() {
     const auto& split = VideoCommon::GpuSplit::Get();
-    return split.Active() && split.FrontMacros() && ReleasesLandAtOnce();
+    return split.Active() && split.FrontMacros() &&
+           (ReleasesLandAtOnce() || VideoCommon::GpuSplit::HighView());
 }
 
 // High GPU accuracy (split mode 1), where the view is off: the front doesn't see the releases
@@ -331,7 +332,19 @@ void NoteResumed(const void* waiter, const Puller::PendingAcquire& acquire,
 // back ran everything before the acquire: the release that work runs then counts as it did (the
 // waiter is registered), and acquires the queued work releases send none.
 void MaybeReleaseFences(DmaPusher& dma_pusher, Puller::PendingAcquire& acquire) {
-    if (acquire.fences_released || !VideoCommon::GpuSplit::Get().Ran(acquire.sent_at)) {
+    if (!VideoCommon::GpuSplit::Get().Ran(acquire.sent_at)) {
+        return;
+    }
+    if (VideoCommon::GpuSplit::HighView()) {
+        // Delayed fence operations (High): a release queued after the acquire waits for the next
+        // fence, and with every channel waiting none comes. Release them now and then, as the
+        // drain path does (CanResumeAcquire).
+        const auto now = std::chrono::steady_clock::now();
+        if (now - acquire.last_fences < std::chrono::milliseconds{1}) {
+            return;
+        }
+        acquire.last_fences = now;
+    } else if (acquire.fences_released) {
         return;
     }
     acquire.fences_released = true;

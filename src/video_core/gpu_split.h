@@ -365,6 +365,10 @@ public:
     /// fences, CounterReport keeps it synchronized (is_synced): its operation runs as the back
     /// runs it, without waiting for the fence.
     static Landing FencedPayloadLanding();
+    /// amd-radv experiment (EDEN_NX2_SPLIT_HIGH_VIEW=1): the front's semaphore view at High GPU
+    /// accuracy. There payload reports without a fence flag wait for the next fence as well
+    /// (CounterReport's SyncOperation), so every release counts as Landing::Fenced.
+    static bool HighView();
     /// A semaphore release was just sent: once it landed (`landing`), the word at
     /// `device_address` holds `payload`, or a value the front can't tell (`known` false: a
     /// reduction, a counter report), or `payload` at least (`at_least`: a maximum with a value the

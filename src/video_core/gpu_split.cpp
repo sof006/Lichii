@@ -230,6 +230,10 @@ void GpuSplit::MaybeStart(Core::System& system_) {
     LOG_INFO(HW_GPU, "GPU thread split: engine methods run on a second thread{}{}",
              front_macros ? ", macros on the first" : "",
              high ? " (High GPU accuracy)" : "");
+    if (high && front_macros && HighView()) {
+        LOG_INFO(HW_GPU, "GPU thread split: semaphore view on at High GPU accuracy "
+                         "(EDEN_NX2_SPLIT_HIGH_VIEW=1)");
+    }
 }
 
 void GpuSplit::Stop() {
@@ -391,8 +395,21 @@ GpuSplit::Landing GpuSplit::FencedPayloadLanding() {
     return synced ? Landing::AtRun : Landing::Fenced;
 }
 
+bool GpuSplit::HighView() {
+    static const bool wanted = [] {
+        const char* value = std::getenv("EDEN_NX2_SPLIT_HIGH_VIEW");
+        return value != nullptr && value[0] == '1';
+    }();
+    return wanted && Settings::IsGPULevelHigh();
+}
+
 void GpuSplit::NoteSemaphoreWrite(u64 device_address, u32 payload, bool known, bool at_least,
                                   Landing landing) {
+    if (landing == Landing::AtRun && HighView()) {
+        // High: releases noted as landing at run (reductions, maxima among them) may wait for a
+        // fence too. Fenced is the safe reading: memory decides until a later fence landed.
+        landing = Landing::Fenced;
+    }
     if (semaphore_writes.size() >= semaphore_writes_limit) {
         // The words of releases in memory hold their values.
         std::erase_if(semaphore_writes,
