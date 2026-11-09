@@ -150,10 +150,15 @@ void GpuSplit::CheckOwner(const char* where) {
 GpuSplit GpuSplit::instance;
 
 void GpuSplit::MaybeStart(Core::System& system_) {
-    static const char mode = [] {
-        const char* value = std::getenv("EDEN_NX2_SPLIT");
-        return value != nullptr ? value[0] : '2';
+    static const char* const mode_value = std::getenv("EDEN_NX2_SPLIT");
+    // amd-radv: the split also runs at High GPU accuracy unless EDEN_NX2_SPLIT_HIGH=0, with the
+    // macros on the back there (mode 1) when EDEN_NX2_SPLIT doesn't pick a mode.
+    static const bool split_high_wanted = [] {
+        const char* value = std::getenv("EDEN_NX2_SPLIT_HIGH");
+        return value == nullptr || value[0] != '0';
     }();
+    const bool high = Settings::IsGPULevelHigh();
+    const char mode = mode_value != nullptr ? mode_value[0] : (high && split_high_wanted ? '1' : '2');
     const bool wanted = mode == '1' || mode == '2';
     if (!wanted || !Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
         return;
@@ -161,13 +166,12 @@ void GpuSplit::MaybeStart(Core::System& system_) {
     // The front reads command lists straight from guest memory; a read that flushes the caches
     // first (safe DMA, accurate GPU) would touch back-owned state. The settings can change
     // mid-game: hand the engines back to the front (and start again when they allow it).
-    // TEST (EDEN_NX2_SPLIT_HIGH=1): also split at High GPU accuracy, with unsafe DMA reads unless
-    // DMA accuracy is Safe (Default follows the switch, not the GPU accuracy). Only with the
-    // macros on the back (EDEN_NX2_SPLIT=1): High's macro parameter refresh and texture cache
-    // checks then run there, and the front's semaphore view, which assumes payload reports land
-    // as the back runs them (not at High), stays off.
-    static const bool split_high = mode == '1' && std::getenv("EDEN_NX2_SPLIT_HIGH") != nullptr;
-    const bool high = Settings::IsGPULevelHigh();
+    // At High GPU accuracy the split reads command lists unsafely unless DMA accuracy is Safe
+    // (Default follows the split, not the GPU accuracy). Only with the macros on the back
+    // (mode 1): High's macro parameter refresh and texture cache checks then run there, and the
+    // front's semaphore view, which assumes payload reports land as the back runs them (not at
+    // High), stays off.
+    const bool split_high = mode == '1' && split_high_wanted;
     const bool safe_reads = Settings::IsDMALevelDefault() ? high && !split_high
                                                           : Settings::IsDMALevelSafe();
     const bool allowed = !safe_reads && (!high || split_high) &&
@@ -175,11 +179,12 @@ void GpuSplit::MaybeStart(Core::System& system_) {
     if (split_high && high && safe_reads && !active) {
         static std::atomic<bool> hinted{};
         if (!hinted.exchange(true)) {
-            LOG_WARNING(HW_GPU, "GPU thread split: EDEN_NX2_SPLIT_HIGH needs DMA accuracy Default "
-                                "or Unsafe; it is Safe, so the split stays off");
+            LOG_WARNING(HW_GPU, "GPU thread split: at High GPU accuracy it needs DMA accuracy "
+                                "Default or Unsafe; it is Safe, so the split stays off");
         }
     }
-    if (active && !allowed) {
+    // Macros on the front (mode 2, started below High) are not for High: start again in mode 1.
+    if (active && (!allowed || (high && front_macros))) {
         Drain();
         Stop();
         LOG_INFO(HW_GPU, "GPU thread split: stopped, the accuracy settings need the caches on the front");
@@ -200,7 +205,7 @@ void GpuSplit::MaybeStart(Core::System& system_) {
     front_macros = mode == '2' && (jit == nullptr || jit[0] != '0');
     LOG_INFO(HW_GPU, "GPU thread split: engine methods run on a second thread{}{}",
              front_macros ? ", macros on the first" : "",
-             high ? " (High GPU accuracy, EDEN_NX2_SPLIT_HIGH)" : "");
+             high ? " (High GPU accuracy)" : "");
 }
 
 void GpuSplit::Stop() {
