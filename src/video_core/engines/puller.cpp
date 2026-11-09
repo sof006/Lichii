@@ -103,6 +103,20 @@ bool ReleasesLandAtOnce() {
     return !delay_fence && !Settings::IsGPULevelHigh();
 }
 
+// High GPU accuracy with the split (EDEN_NX2_SPLIT_HIGH): releases land at their fence, not when
+// the back runs them, and the front doesn't see the ones the back's macros send. A word memory
+// already meets still meets the acquire once the back caught up (the words only advance), and one
+// it doesn't meet waits as below High: the write at the fence latches the waiter, and the valve
+// drains and releases the fences once per 1 ms. A queued release the front sent still drains.
+// EDEN_NX2_SPLIT_HIGH_ACQUIRE=0 drains for every acquire there instead.
+bool HighAcquiresFromMemory() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_SPLIT_HIGH_ACQUIRE");
+        return value == nullptr || value[0] != '0';
+    }();
+    return enabled && Settings::IsGPULevelHigh();
+}
+
 enum class AcquireCheck {
     Met,         ///< By the word in memory
     MetByQueued, ///< By a release sent to the word that the back has not run yet
@@ -121,7 +135,8 @@ AcquireCheck CheckWithoutDrain(DmaPusher& dma_pusher, const Puller::PendingAcqui
         VideoCommon::Count(stats.drain_operation);
         return AcquireCheck::Drain;
     }
-    if (!split.Active() || !split.FrontMacros() || !ReleasesLandAtOnce()) {
+    const bool full = split.Active() && split.FrontMacros() && ReleasesLandAtOnce();
+    if (!full && !(split.Active() && HighAcquiresFromMemory())) {
         VideoCommon::Count(stats.drain_settings);
         return AcquireCheck::Drain;
     }
@@ -132,7 +147,7 @@ AcquireCheck CheckWithoutDrain(DmaPusher& dma_pusher, const Puller::PendingAcqui
         return AcquireCheck::Drain;
     }
     if (const auto queued = split.QueuedSemaphoreWriteAt(*device)) {
-        if (queued->known && acquire.Matches(queued->payload)) {
+        if (full && queued->known && acquire.Matches(queued->payload)) {
             return AcquireCheck::MetByQueued;
         }
         VideoCommon::Count(stats.drain_queued);
