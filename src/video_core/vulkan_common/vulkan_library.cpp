@@ -4,12 +4,12 @@
 // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
 #include <string>
 
 #ifdef _WIN32
 #include <windows.h>
 
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -141,6 +141,15 @@ std::shared_ptr<Common::DynamicLibrary> OpenLibrary(
         }
     }
 #else
+#ifdef __linux__
+    // Mesa's disk cache holds 1 GB by default, and the shader warm-up keeps its pipeline
+    // libraries only there: a full warm-up of a large title needs more, or Mesa evicts its
+    // oldest entries and they are compiled again in play. Read when the driver is loaded.
+    if (setenv("MESA_SHADER_CACHE_MAX_SIZE", "8G", 0) == 0) {
+        LOG_INFO(Render_Vulkan, "Mesa shader cache limit: {}",
+                 std::getenv("MESA_SHADER_CACHE_MAX_SIZE"));
+    }
+#endif
     std::string filename = Common::DynamicLibrary::GetVersionedFilename("vulkan", 1);
     LOG_DEBUG(Render_Vulkan, "Trying Vulkan library: {}", filename);
     if (!library->Open(filename.c_str())) {
