@@ -220,7 +220,7 @@ struct ThreadData {
     std::array<u64, static_cast<size_t>(FineCounter::Count)> fine_counters{}; ///< TEST
     std::array<u64, static_cast<size_t>(Zone::Count)> exclusive_ns{};
     std::array<u64, static_cast<size_t>(Zone::Count)> count{};
-    std::array<u64, 12> counters{}; ///< See Counter
+    std::array<u64, 13> counters{}; ///< See Counter
     std::array<u64, static_cast<size_t>(DrainSite::Count)> drain_ns{};
     std::array<u64, static_cast<size_t>(DrainSite::Count)> drain_count{};
     /// GPU waits by the zone they happened in (Other: outside every zone)
@@ -422,6 +422,7 @@ enum class Counter : u32 {
     LatePublishes,
     ResnapshotWords, ///< TEST: command list words copied again at resumes
     EarlyPublishes,  ///< TEST: publishes to a back waiting for work, before publish_every
+    HighAcquiresFromMemory, ///< Of AcquireChecks: met in memory at High GPU accuracy, no drain
 };
 
 /// Method calls on this thread by method (3D registers on the back, macros on the front), and
@@ -561,6 +562,10 @@ inline void Report(const char* thread_name = "GPU thread", bool report_all_conte
     line += fmt::format(" | acquires {:.0f} ({:.0f} waited)",
                         static_cast<double>(data.counters[6]) * 1e9 / window,
                         static_cast<double>(data.counters[7]) * 1e9 / window);
+    if (data.counters[12] != 0) {
+        line += fmt::format(" | acquires met in memory at High {:.0f}",
+                            static_cast<double>(data.counters[12]) * 1e9 / window);
+    }
     if (data.counters[9] != 0 || data.counters[10] != 0 || data.counters[11] != 0) {
         // TEST: the back idle while words it could run waited on the front.
         line += fmt::format(" | publishes to an idle back late by {:.1f} ms ({:.0f}/s), early "

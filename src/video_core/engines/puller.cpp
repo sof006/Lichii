@@ -139,6 +139,31 @@ bool ViewApplies() {
     return split.Active() && split.FrontMacros() && ReleasesLandAtOnce();
 }
 
+// High GPU accuracy (split mode 1), where the view is off: the front doesn't see the releases
+// the back's macros send, and releases land once their fence ran. A greater-or-equal acquire the
+// word already meets in memory still holds once the back ran the queued work (the words only
+// advance, as AskView relies on), unless the front queued a release to the word itself: that
+// one decides as after a drain. The word is read as ReadSemaphoreWord reads it, without the
+// buffer cache flush, which only finds it newer. EDEN_NX2_SPLIT_HIGH_ACQUIRE=0 drains for every
+// acquire; EDEN_NX2_DRAIN_CHECK drains anyway and counts passes the drained word doesn't meet
+// with the view's (by memory).
+bool MetWithoutDrainAtHigh(DmaPusher& dma_pusher, const Puller::PendingAcquire& acquire) {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_SPLIT_HIGH_ACQUIRE");
+        return value == nullptr || value[0] != '0';
+    }();
+    const auto& split = VideoCommon::GpuSplit::Get();
+    if (!enabled || !split.Active() || ViewApplies() || !acquire.WaitsToReach()) {
+        return false;
+    }
+    const auto device = dma_pusher.memory_manager.GpuToCpuAddress(acquire.address);
+    if (!device || split.QueuedSemaphoreWriteAt(*device)) {
+        return false;
+    }
+    const u32 word = dma_pusher.memory_manager.Read<u32>(acquire.address);
+    return acquire.Matches(Nx2MirrorShadow::Get().Read(*device, word).value_or(word));
+}
+
 // What the front can tell of an acquire without waiting for the back.
 struct ViewAnswer {
     enum class Kind {
@@ -622,6 +647,16 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireChecks, 1);
         if (AcquireWithoutDrain(dma_pusher, acquire)) {
             return;
+        }
+        if (MetWithoutDrainAtHigh(dma_pusher, acquire)) {
+            const auto device = dma_pusher.memory_manager.GpuToCpuAddress(acquire.address);
+            if (!VideoCommon::Nx2DrainCheck::g_enabled ||
+                PassStands(dma_pusher, acquire, nullptr, *device, false,
+                           VideoCommon::Nx2DrainCheck::ViewPass::Memory)) {
+                VideoCommon::Nx2Profile::Add(
+                    VideoCommon::Nx2Profile::Counter::HighAcquiresFromMemory, 1);
+                return;
+            }
         }
         if (VideoCommon::Nx2AcquireStats::g_enabled) [[unlikely]] {
             VideoCommon::Nx2AcquireStats::NoteAcquire(
