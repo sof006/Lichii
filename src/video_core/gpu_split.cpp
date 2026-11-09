@@ -157,11 +157,20 @@ void GpuSplit::MaybeStart(Core::System& system_) {
         const char* value = std::getenv("EDEN_NX2_SPLIT_HIGH");
         return value == nullptr || value[0] != '0';
     }();
+    // amd-radv9 experiment: EDEN_NX2_SPLIT_HIGH_FRONT_MACROS=1 keeps mode 2 (macros on the front)
+    // at High too. The front runs the macro code on the parameters as it read them: High's
+    // parameter refresh (RefreshParameters, a re-read of command list words the GPU may have
+    // written) doesn't run for those macros. Macros that read memory still run on the back.
+    static const bool front_macros_high = [] {
+        const char* value = std::getenv("EDEN_NX2_SPLIT_HIGH_FRONT_MACROS");
+        return value != nullptr && value[0] == '1';
+    }();
     const bool high = Settings::IsGPULevelHigh();
     const char requested = mode_value != nullptr ? mode_value[0] : '2';
-    // Mode 2 keeps the macros on the front, which High can't use: High runs mode 1 instead, also
-    // when EDEN_NX2_SPLIT=2 asks for mode 2 (a switch meant for lower accuracy).
-    const char mode = high && split_high_wanted && requested == '2' ? '1' : requested;
+    // Mode 2 keeps the macros on the front, which High doesn't use by default: High runs mode 1
+    // instead, also when EDEN_NX2_SPLIT=2 asks for mode 2 (a switch meant for lower accuracy).
+    const char mode =
+        high && split_high_wanted && requested == '2' && !front_macros_high ? '1' : requested;
     const bool wanted = mode == '1' || mode == '2';
     if (!Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
         return;
@@ -185,7 +194,7 @@ void GpuSplit::MaybeStart(Core::System& system_) {
     // (mode 1): High's macro parameter refresh and texture cache checks then run there, and the
     // front's semaphore view, which assumes payload reports land as the back runs them (not at
     // High), stays off.
-    const bool split_high = mode == '1' && split_high_wanted;
+    const bool split_high = (mode == '1' || (mode == '2' && front_macros_high)) && split_high_wanted;
     const bool safe_reads = Settings::IsDMALevelDefault() ? high && !split_high
                                                           : Settings::IsDMALevelSafe();
     const bool allowed = !safe_reads && (!high || split_high) &&
@@ -198,7 +207,7 @@ void GpuSplit::MaybeStart(Core::System& system_) {
         }
     }
     // Macros on the front (mode 2, started below High) are not for High: start again in mode 1.
-    if (active && (!allowed || (high && front_macros))) {
+    if (active && (!allowed || (high && front_macros && !front_macros_high))) {
         Drain();
         Stop();
         LOG_INFO(HW_GPU, "GPU thread split: stopped, the accuracy settings need the caches on the front");
@@ -219,7 +228,9 @@ void GpuSplit::MaybeStart(Core::System& system_) {
     front_macros = mode == '2' && (jit == nullptr || jit[0] != '0');
     LOG_INFO(HW_GPU, "GPU thread split: engine methods run on a second thread{}{}",
              front_macros ? ", macros on the first" : "",
-             high ? " (High GPU accuracy)" : "");
+             high ? (front_macros ? " (High GPU accuracy, EDEN_NX2_SPLIT_HIGH_FRONT_MACROS=1)"
+                                  : " (High GPU accuracy)")
+                  : "");
 }
 
 void GpuSplit::Stop() {
