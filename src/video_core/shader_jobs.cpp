@@ -39,6 +39,7 @@ struct ShaderJobState {
     std::chrono::steady_clock::time_point stage_begin;
     std::optional<std::chrono::steady_clock::time_point> stalled_since;
     bool started{};
+    bool held_background_driver{};
 };
 
 namespace {
@@ -222,6 +223,11 @@ void ShaderJobScheduler::Promote(const ShaderJobHandle& handle, ShaderJobPriorit
     } else {
         --from.running;
         ++to.running;
+        if (job.held_background_driver && priority != ShaderJobPriority::Background) {
+            job.held_background_driver = false;
+            --running_background_driver;
+            driver_condition.notify_one();
+        }
     }
     job.priority = priority;
     if (!IsQueued(status)) {
@@ -278,6 +284,18 @@ void ShaderJobScheduler::RunOrWait(const ShaderJobHandle& handle) {
     }
     lock.unlock();
     handle.Wait();
+}
+
+void ShaderJobScheduler::SetMaxBackgroundDriverThreads(size_t max_threads) {
+    bool grew{};
+    {
+        std::scoped_lock lock{mutex};
+        grew = max_threads > max_background_driver_threads;
+        max_background_driver_threads = max_threads;
+    }
+    if (grew) {
+        driver_condition.notify_all();
+    }
 }
 
 void ShaderJobScheduler::Shutdown() {
@@ -346,7 +364,10 @@ ShaderJobScheduler::JobPtr ShaderJobScheduler::Pick(bool driver, Clock::time_poi
     std::deque<JobPtr>* entries{front(ShaderJobPriority::NeedNow)};
     if (!entries) {
         std::deque<JobPtr>* const soon{front(ShaderJobPriority::Soon)};
-        std::deque<JobPtr>* const background{front(ShaderJobPriority::Background)};
+        std::deque<JobPtr>* background{front(ShaderJobPriority::Background)};
+        if (driver && running_background_driver >= max_background_driver_threads) {
+            background = nullptr;
+        }
         const bool aged{background && soon &&
                         now - background->front()->submitted >= background_aging &&
                         background->front()->submitted < soon->front()->submitted};
@@ -388,6 +409,10 @@ void ShaderJobScheduler::StartStage(ShaderJobState& job, bool driver, Clock::tim
     job.held_bytes = driver ? job.work.driver_bytes : job.work.cpu_bytes;
     stats.in_flight_bytes += job.held_bytes;
     stats.peak_in_flight_bytes = std::max(stats.peak_in_flight_bytes, stats.in_flight_bytes);
+    if (driver && job.priority.load() == ShaderJobPriority::Background) {
+        job.held_background_driver = true;
+        ++running_background_driver;
+    }
     job.status = driver ? ShaderJobStatus::Driver : ShaderJobStatus::Cpu;
     job.stage_begin = now;
 }
@@ -464,12 +489,22 @@ void ShaderJobScheduler::RunDriver(const JobPtr& job) {
     stats.priorities[Index(job->priority.load())].driver_run_ns +=
         Nanoseconds(Clock::now() - job->stage_begin);
     ReleaseBytes(*job);
+    if (job->held_background_driver) {
+        job->held_background_driver = false;
+        --running_background_driver;
+        driver_condition.notify_one();
+    }
     job->exception = exception;
     Finish(*job, exception ? ShaderJobStatus::Failed : ShaderJobStatus::Done, dead);
 }
 
 void ShaderJobScheduler::Finish(ShaderJobState& job, ShaderJobStatus status,
                                 std::vector<ShaderJob>& dead) {
+    if (job.held_background_driver) {
+        job.held_background_driver = false;
+        --running_background_driver;
+        driver_condition.notify_one();
+    }
     auto& counters{stats.priorities[Index(job.priority.load())]};
     if (IsQueued(job.status.load())) {
         --counters.queued;

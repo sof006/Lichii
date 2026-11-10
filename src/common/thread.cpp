@@ -19,6 +19,7 @@
 #include "common/event_wait.h"
 #include "common/logging.h"
 #include "common/assert.h"
+#include "common/settings.h"
 #include "common/thread.h"
 #ifdef __APPLE__
 #include <mach/mach.h>
@@ -728,13 +729,15 @@ void SetCurrentThreadToPerformanceCores() {
 #endif
 }
 
-void PinCurrentThread(PinnedRole role) {
 #ifdef _WIN32
-    struct PinnedCpuSets {
-        std::vector<ULONG> front;
-        std::vector<ULONG> back;
-        std::vector<ULONG> guest;
-    };
+namespace {
+struct PinnedCpuSets {
+    std::vector<ULONG> front;
+    std::vector<ULONG> back;
+    std::vector<ULONG> guest;
+};
+
+const PinnedCpuSets& GetPinnedCpuSets() {
     static const PinnedCpuSets pinned = [] {
         const GpuThreadPinning plan = PlanGpuThreadPinning(CpuSets().processors);
         if (plan.front.empty()) {
@@ -751,6 +754,14 @@ void PinCurrentThread(PinnedRole role) {
                              {plan.back.begin(), plan.back.end()},
                              {plan.guest.begin(), plan.guest.end()}};
     }();
+    return pinned;
+}
+} // Anonymous namespace
+#endif
+
+void PinCurrentThread(PinnedRole role) {
+#ifdef _WIN32
+    const PinnedCpuSets& pinned = GetPinnedCpuSets();
     const std::vector<ULONG>& ids = role == PinnedRole::GpuFront  ? pinned.front
                                     : role == PinnedRole::GpuBack ? pinned.back
                                                                   : pinned.guest;
@@ -808,6 +819,13 @@ void SetCurrentThreadToBackgroundWork() {
 #elif defined(_WIN32)
     if (const WindowsCpuSets& sets = CpuSets(); sets.hybrid) {
         SelectCurrentThreadCpuSets({});
+    } else if (Settings::values.pin_gpu_threads.GetValue()) {
+        // Non-hybrid desktop CPUs (e.g. Ryzen 7 7800X3D) have no efficiency cores: keep background
+        // shader and LLPC driver workers off the two physical cores reserved for GpuFront/GpuBack.
+        const PinnedCpuSets& pinned = GetPinnedCpuSets();
+        if (!pinned.guest.empty()) {
+            SelectCurrentThreadCpuSets(pinned.guest);
+        }
     }
 #endif
 }
@@ -817,9 +835,7 @@ void SetCurrentThreadToAllCores() {
     ADPF::RemoveCurrentThread();
     SetCurrentThreadCoreGroup(CoreGroup::Unrestricted);
 #elif defined(_WIN32)
-    if (const WindowsCpuSets& sets = CpuSets(); sets.hybrid) {
-        SelectCurrentThreadCpuSets({});
-    }
+    SelectCurrentThreadCpuSets({});
 #endif
 }
 

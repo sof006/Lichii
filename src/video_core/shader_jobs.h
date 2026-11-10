@@ -9,6 +9,7 @@
 #include <deque>
 #include <exception>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -170,6 +171,10 @@ public:
     /// the worker running them.
     void RunOrWait(const ShaderJobHandle& handle);
 
+    /// Caps how many Background driver stages may run on driver workers at once (SIZE_MAX = all),
+    /// keeping the remaining driver workers free for NeedNow and Soon builds during gameplay.
+    void SetMaxBackgroundDriverThreads(size_t max_threads);
+
     /// Cancels the queued jobs and joins the workers once their running stages end. A CPU stage
     /// that ends during shutdown gets no driver stage.
     void Shutdown();
@@ -203,6 +208,8 @@ private:
     bool stopping{};
     /// A worker waits for in-flight bytes to drop.
     bool budget_held{};
+    size_t max_background_driver_threads{std::numeric_limits<size_t>::max()};
+    size_t running_background_driver{};
     ShaderJobStats stats;
     std::vector<std::thread> threads;
 };

@@ -872,3 +872,52 @@ TEST_CASE("A pipeline build job is dropped while queued and run by a waiting dra
     REQUIRE(owned.IsBuilt());
     REQUIRE(builds == 3);
 }
+
+TEST_CASE("Background driver thread cap reserves workers for Soon and NeedNow",
+          "[video_core][shader_jobs]") {
+    ShaderJobScheduler scheduler{Config(2, 3)};
+    scheduler.SetMaxBackgroundDriverThreads(1);
+
+    Gate bg_gate;
+    std::atomic<int> bg_active{};
+    std::atomic<int> max_bg_active{};
+    std::promise<void> first_bg_entered;
+
+    const auto bg1 = scheduler.Submit(TwoStageJob(
+        Background, [](ShaderJobContext&) {},
+        [&] {
+            const int cur = ++bg_active;
+            max_bg_active.store(std::max(max_bg_active.load(), cur));
+            first_bg_entered.set_value();
+            bg_gate.Wait();
+            --bg_active;
+        }));
+    first_bg_entered.get_future().wait();
+
+    const auto bg2 = scheduler.Submit(TwoStageJob(
+        Background, [](ShaderJobContext&) {},
+        [&] {
+            const int cur = ++bg_active;
+            max_bg_active.store(std::max(max_bg_active.load(), cur));
+            bg_gate.Wait();
+            --bg_active;
+        }));
+    WaitForStatus(bg2, ShaderJobStatus::DriverQueued);
+    std::this_thread::sleep_for(20ms);
+    REQUIRE(bg2.Status() == ShaderJobStatus::DriverQueued);
+
+    // Soon and NeedNow driver jobs run immediately on the 2 reserved driver threads even while
+    // Background driver jobs are blocked at the cap.
+    const auto soon_job =
+        scheduler.Submit(TwoStageJob(Soon, [](ShaderJobContext&) {}, [] {}));
+    const auto need_job =
+        scheduler.Submit(TwoStageJob(NeedNow, [](ShaderJobContext&) {}, [] {}));
+    REQUIRE(soon_job.WaitFor(500ms));
+    REQUIRE(need_job.WaitFor(500ms));
+    REQUIRE(bg2.Status() == ShaderJobStatus::DriverQueued);
+
+    bg_gate.Open();
+    bg1.Wait();
+    bg2.Wait();
+    REQUIRE(max_bg_active.load() == 1);
+}

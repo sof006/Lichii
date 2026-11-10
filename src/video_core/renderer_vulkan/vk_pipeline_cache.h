@@ -315,6 +315,7 @@ private:
     /// The pipelines' builds, the prebuild and the precache. Declared before the pipelines, whose
     /// builds it runs.
     std::optional<VideoCommon::ShaderJobScheduler> shader_jobs;
+    size_t gameplay_bg_driver_threads{std::numeric_limits<size_t>::max()};
     /// IR of the pipelines whose job emits their SPIR-V
     QueuedIrBudget queued_ir{VideoCommon::DefaultShaderJobBudget()};
     std::optional<ScheduledPrebuild<GraphicsPipelineCacheKey, GraphicsPipeline>> scheduled_prebuild;

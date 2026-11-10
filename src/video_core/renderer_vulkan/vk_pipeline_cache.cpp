@@ -25,6 +25,7 @@
 #include <bit>
 #include <numeric>
 #include "common/cityhash.h"
+#include "common/memory_detect.h"
 #include "common/scope_exit.h"
 #include "common/fs/fs.h"
 #include "common/fs/fs_util.h"
@@ -913,11 +914,22 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
         device.HasBrokenParallelShaderCompiling()
             ? 1
             : std::min(cpu_threads, std::max<size_t>(std::thread::hardware_concurrency() / 2, 2));
+    gameplay_bg_driver_threads = [&] {
+        if (const char* value = std::getenv("EDEN_NX2_BG_DRIVER_THREADS")) {
+            const long parsed = std::strtol(value, nullptr, 10);
+            if (parsed <= 0) {
+                return std::numeric_limits<size_t>::max();
+            }
+            return static_cast<size_t>(parsed);
+        }
+        return driver_threads > 2 ? std::clamp<size_t>(driver_threads / 3, 1, 3) : driver_threads;
+    }();
     shader_jobs.emplace(VideoCommon::ShaderJobConfig{
         .cpu_threads = cpu_threads,
         .driver_threads = driver_threads,
         .name = "VkShader",
     });
+    shader_jobs->SetMaxBackgroundDriverThreads(gameplay_bg_driver_threads);
 }
 
 namespace {
@@ -1181,6 +1193,10 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     if (title_id == 0) {
         return;
     }
+    shader_jobs->SetMaxBackgroundDriverThreads(std::numeric_limits<size_t>::max());
+    SCOPE_EXIT {
+        shader_jobs->SetMaxBackgroundDriverThreads(gameplay_bg_driver_threads);
+    };
     if (!pipeline_cache_filename.empty()) {
         StopBackgroundJobs();
         serialization_thread.WaitForRequests();
@@ -2464,6 +2480,31 @@ void PipelineCache::EvictUnusedPipelines() {
     // one by one in new places).
     if (PreloadAllPipelines()) {
         return;
+    }
+    static const int evict_override = [] {
+        const char* value = std::getenv("EDEN_NX2_EVICT_PIPELINES");
+        if (!value || !*value) {
+            return -1;
+        }
+        return *value == '0' ? 0 : 1;
+    }();
+    if (evict_override == 0) {
+        return;
+    }
+    if (evict_override < 0) {
+        // Desktop systems with >= 32 GiB class RAM (allowing iGPU UMA carveout) and >= 10 GiB VRAM
+        // keep compiled pipelines resident while system commit room stays healthy (>= 6 GiB),
+        // avoiding repeated GPU-thread shader re-translations when revisiting areas.
+        constexpr u64 DesktopRamFloor = 28ULL << 30;
+        constexpr u64 DesktopVramFloor = 10ULL << 30;
+        constexpr u64 HealthyCommitRoom = 6ULL << 30;
+        if (Common::GetMemInfo().TotalPhysicalMemory >= DesktopRamFloor &&
+            device.GetDeviceLocalMemory() >= DesktopVramFloor) {
+            const std::optional<u64> commit_room = Common::GetSystemCommitRoom();
+            if (!commit_room || *commit_room >= HealthyCommitRoom) {
+                return;
+            }
+        }
     }
     // Each built pipeline holds ~0.45 MB of driver memory and none was ever destroyed, so it grew
     // with every place a session went (title 1: 1,500 on its title screen alone). One unused for
