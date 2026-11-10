@@ -175,7 +175,14 @@ private:
     /// moment. A target drawn once (a baked texture) would keep the missing draw.
     [[nodiscard]] bool CurrentTargetIsRedrawn();
 
-    std::unique_ptr<GraphicsPipeline> CreateGraphicsPipeline();
+    /// With `keep_pointers`, the slots an evicted pipeline of this key bound stay storage buffer
+    /// pointers whatever they hold now.
+    std::unique_ptr<GraphicsPipeline> CreateGraphicsPipeline(
+        const VideoCommon::EvictedPointerSlots::Slots* keep_pointers = nullptr);
+
+    /// Logs a kept pointer slot (an index of keep_pointers) that this translation would otherwise
+    /// have classified as no pointer: null, unmapped, or out of range right now.
+    void WarnKeptPointer(size_t program, u64 slot) const;
 
     /// Shader cache v2, run-time misses: the stages translated at once on shader_jobs' CPU workers
     /// while the GPU thread waited (VideoCommon::TranslateStages)
@@ -340,6 +347,7 @@ private:
     std::unordered_map<u64, u64> cleared_frames; ///< Target address -> last frame it was cleared
     std::deque<std::pair<u64, std::unique_ptr<GraphicsPipeline>>> evicted_pipelines; ///< (tick, pipeline)
     std::unordered_set<u64> used_and_evicted; ///< Key hashes of pipelines used this session, evicted since
+    VideoCommon::EvictedPointerSlots evicted_pointer_slots;
 
     ::Common::unordered_map<ComputePipelineCacheKey, ComputePipelineCacheEntry> compute_cache;
     /// Replaced compute pipelines, destroyed once the GPU and their queued build are done with
