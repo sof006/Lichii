@@ -8,6 +8,8 @@
 #undef VMA_IMPLEMENTATION
 #endif
 
+#include <cstdlib>
+#include <fstream>
 #include <QSysInfo>
 #include <boost/algorithm/string/split.hpp>
 #include "common/fs/path_util.h"
@@ -4528,6 +4530,50 @@ QString GameTitleName(const std::string& game_path) {
     }
     return QFileInfo(QString::fromStdString(game_path)).completeBaseName();
 }
+
+/// The precache builds a game's graphics shaders (most of them) only with Shader libraries on.
+/// When they are off in the global settings and this game's graphics shaders were never
+/// precached, asks to turn them on. "Only compute shaders" is remembered in the game's precache
+/// folder. Returns whether the setting was turned on.
+bool OfferShaderLibrariesForPrecache(QWidget* parent, u64 title_id) {
+    namespace ShaderWarm = VideoCommon::ShaderWarm;
+    auto& libraries = Settings::values.use_graphics_pipeline_library;
+    const char* gpl_env = std::getenv("EDEN_NX2_GPL");
+    const bool env_on = gpl_env != nullptr && *gpl_env != '\0' && *gpl_env != '0';
+    // A per-game choice is the user's own.
+    if (libraries.GetValue() || env_on || !libraries.UsingGlobal()) {
+        return false;
+    }
+    std::error_code ec;
+    const auto graphics_file = ShaderWarm::GraphicsWarmPath(title_id);
+    const auto declined = graphics_file.parent_path() / "precache-without-libraries";
+    if (std::filesystem::exists(ShaderWarm::WarmMarkerPath(graphics_file), ec) ||
+        std::filesystem::exists(declined, ec)) {
+        return false;
+    }
+    QMessageBox box(
+        QMessageBox::Question, MainWindow::tr("Precache Shaders"),
+        MainWindow::tr("Most of a game's shaders are graphics shaders. The precache builds them "
+                       "only with Shader libraries on; without them, only the compute shaders "
+                       "are built before the game starts.\n\nTurn on Shader libraries? You can "
+                       "change this in Configure, Graphics, Advanced."),
+        QMessageBox::NoButton, parent);
+    QPushButton* const turn_on =
+        box.addButton(MainWindow::tr("Turn on Shader libraries"), QMessageBox::AcceptRole);
+    box.addButton(MainWindow::tr("Only compute shaders"), QMessageBox::RejectRole);
+    box.setDefaultButton(turn_on);
+    box.exec();
+    const bool on = box.clickedButton() == turn_on;
+    LOG_INFO(Frontend, "Shader libraries for the shader precache: {}",
+             on ? "turned on" : "left off");
+    if (!on) {
+        std::filesystem::create_directories(declined.parent_path(), ec);
+        std::ofstream{declined};
+        return false;
+    }
+    libraries.SetValue(true);
+    return true;
+}
 } // namespace
 
 /// Opens the shader precache dialog for the game and starts the build, or brings a running one to
@@ -4573,8 +4619,14 @@ void MainWindow::PrepareShaderPrecache(u64 title_id, const std::filesystem::path
         !Settings::values.use_disk_shader_cache.GetValue()) {
         return;
     }
+    const auto offer_libraries = [this, title_id] {
+        if (OfferShaderLibrariesForPrecache(this, title_id)) {
+            config->SaveAllValues();
+        }
+    };
     if (!ShaderWarm::WarmPending(title_id)) {
         // Precached before: the renderer runs it again only when the driver or the file changed.
+        offer_libraries();
         ShaderWarm::RequestWarmBeforeStart(true);
         return;
     }
@@ -4598,6 +4650,7 @@ void MainWindow::PrepareShaderPrecache(u64 title_id, const std::filesystem::path
             return;
         }
     }
+    offer_libraries();
     std::error_code ec;
     if (!std::filesystem::exists(ShaderWarm::ComputeWarmPath(title_id), ec)) {
         ShaderWarmDialog dialog(*QtCommon::system, game_path, title_id,

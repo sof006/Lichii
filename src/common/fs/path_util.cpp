@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include "common/container/unordered_map.h"
@@ -112,11 +114,15 @@ public:
         fs::path eden_path_cache;
         fs::path eden_path_config;
         appimage_shader_dir.clear();
+        portable = false;
 #ifdef _WIN32
         // User directory takes priority over global %AppData% directory
         eden_path = GetExeDirectory() / PORTABLE_DIR;
         if (!Exists(eden_path) || !IsDir(eden_path)) {
             eden_path = GetAppDataRoamingDirectory() / EDEN_DIR;
+            appimage_shader_dir = AppImageShaderDir();
+        } else {
+            portable = true;
         }
         eden_path_cache = eden_path / CACHE_DIR;
         eden_path_config = eden_path / CONFIG_DIR;
@@ -222,6 +228,31 @@ private:
             return {};
         }
         return dir;
+#elif defined(_WIN32)
+        // The same beside lichii.exe, so the shaders stay on the drive Lichii is on.
+        const char* enabled = std::getenv("LICHII_EXE_SHADERS");
+        if (enabled != nullptr && enabled[0] == '0') {
+            return {};
+        }
+        const fs::path folder = GetExeDirectory();
+        if (folder.empty()) {
+            return {};
+        }
+        const fs::path dir = folder / "lichii-shaders";
+        std::error_code error;
+        if (fs::exists(dir / USE_HOME_SHADER_DIR_MARKER, error)) {
+            return {};
+        }
+        // A folder Lichii cannot write to (such as Program Files) keeps the usual one.
+        if (!fs::is_directory(dir, error) && !fs::create_directory(dir, error)) {
+            return {};
+        }
+        const fs::path probe = dir / ".write-test";
+        if (!std::ofstream{probe}) {
+            return {};
+        }
+        fs::remove(probe, error);
+        return dir;
 #else
         return {};
 #endif
@@ -230,6 +261,7 @@ private:
 public:
     fs::path appimage_shader_dir;
     fs::path home_shader_dir;
+    bool portable{};
 
 private:
     ::Common::unordered_map<EdenPath, fs::path> eden_paths;
@@ -340,12 +372,36 @@ const fs::path& GetHomeShaderDir() {
 }
 
 fs::path GetDriverShaderCacheDir() {
-    const auto& dir = PathManagerImpl::GetInstance().appimage_shader_dir;
+    const auto& manager = PathManagerImpl::GetInstance();
+#ifdef _WIN32
+    // Beside lichii.exe, or in the portable user folder: both are next to the exe.
+    if (!manager.appimage_shader_dir.empty() || manager.portable) {
+        return GetEdenPath(EdenPath::ShaderDir) / "driver";
+    }
+    return {};
+#else
+    const auto& dir = manager.appimage_shader_dir;
     return dir.empty() ? fs::path{} : dir / "mesa";
+#endif
 }
 
 void ConfigureDriverShaderCache() {
-#if defined(__linux__) && !defined(__ANDROID__)
+#ifdef _WIN32
+    // AMD's Windows driver keeps its cache in <this folder>\AMD\VkCache instead of
+    // %LOCALAPPDATA%\AMD\VkCache. A value the user set stays.
+    if (std::getenv("AMD_SHADER_DISK_CACHE_PATH") != nullptr) {
+        return;
+    }
+    const auto dir = GetDriverShaderCacheDir();
+    if (dir.empty()) {
+        return;
+    }
+    std::error_code error;
+    fs::create_directories(dir, error);
+    if (_wputenv_s(L"AMD_SHADER_DISK_CACHE_PATH", dir.wstring().c_str()) == 0) {
+        LOG_INFO(Common_Filesystem, "AMD driver shader cache folder: {}", PathToUTF8String(dir));
+    }
+#elif defined(__linux__) && !defined(__ANDROID__)
     const auto dir = GetDriverShaderCacheDir();
     if (dir.empty()) {
         return;

@@ -67,6 +67,15 @@ QString Size(u64 bytes) {
     return QStringLiteral("%1 MB").arg(static_cast<double>(bytes) / (1 << 20), 0, 'f', 0);
 }
 
+/// Where the new shader folder is, for the dialog texts.
+QString Beside() {
+#ifdef _WIN32
+    return QObject::tr("next to lichii.exe");
+#else
+    return QObject::tr("next to the AppImage");
+#endif
+}
+
 QString Path(const fs::path& path) {
     return QString::fromStdString(Common::FS::PathToUTF8String(path));
 }
@@ -80,7 +89,8 @@ void Touch(const fs::path& path) {
 /// The folder Mesa uses without MESA_SHADER_CACHE_DIR (see disk_cache_os.c).
 fs::path HomeMesaCacheDir() {
 #ifdef _WIN32
-    // Mesa's cache is a Linux folder; OfferMove never gets here without an AppImage.
+    // Mesa's cache is a Linux folder. AMD's Windows cache (%LOCALAPPDATA%\AMD\VkCache) is
+    // shared by every Vulkan program, so it is left where it is.
     return {};
 #else
     if (const char* xdg = std::getenv("XDG_CACHE_HOME"); xdg != nullptr && xdg[0] == '/') {
@@ -208,8 +218,8 @@ void OfferMove(QWidget* parent) {
         return;
     }
 
-    QString text = QObject::tr("Lichii now keeps its shader caches next to the AppImage, in:\n%1\n\n")
-                       .arg(Path(new_dir));
+    QString text = QObject::tr("Lichii now keeps its shader caches %1, in:\n%2\n\n")
+                       .arg(Beside(), Path(new_dir));
     if (move_own) {
         text += QObject::tr("Lichii's shaders (%1) will be moved from:\n%2\n\n")
                     .arg(Size(own_size), Path(old_dir));
@@ -241,15 +251,17 @@ void OfferMove(QWidget* parent) {
         return;
     }
 
-    const u64 needed = (copy_mesa ? old_mesa_size : 0) + (64ULL << 20);
+    // Moving within one filesystem needs no space; a copy does, as does a move to another drive.
+    const bool other_drive = move_own && old_dir.root_name() != new_dir.root_name();
+    const u64 needed =
+        (copy_mesa ? old_mesa_size : 0) + (other_drive ? own_size : 0) + (64ULL << 20);
     fs::create_directories(new_dir, error);
     const auto space = fs::space(new_dir, error);
-    // Moving within one filesystem needs no space; a copy does.
-    if (!error && space.available < needed && copy_mesa) {
+    if (!error && space.available < needed && (copy_mesa || other_drive)) {
         QMessageBox::warning(parent, QObject::tr("Move shader caches?"),
-                             QObject::tr("There is not enough free space next to the AppImage "
-                                         "(%1 needed, %2 free).")
-                                 .arg(Size(needed), Size(space.available)));
+                             QObject::tr("There is not enough free space %1 "
+                                         "(%2 needed, %3 free).")
+                                 .arg(Beside(), Size(needed), Size(space.available)));
         return;
     }
 

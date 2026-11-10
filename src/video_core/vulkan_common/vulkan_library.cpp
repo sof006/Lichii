@@ -149,8 +149,9 @@ std::shared_ptr<Common::DynamicLibrary> OpenLibrary(
         LOG_INFO(Render_Vulkan, "Mesa shader cache limit: {}",
                  std::getenv("MESA_SHADER_CACHE_MAX_SIZE"));
     }
-    Common::FS::ConfigureDriverShaderCache();
 #endif
+    // Mesa's cache on Linux, AMD's on Windows: next to the shader folder when it is beside Lichii.
+    Common::FS::ConfigureDriverShaderCache();
     std::string filename = Common::DynamicLibrary::GetVersionedFilename("vulkan", 1);
     LOG_DEBUG(Render_Vulkan, "Trying Vulkan library: {}", filename);
     if (!library->Open(filename.c_str())) {

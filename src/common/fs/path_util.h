@@ -242,11 +242,11 @@ void SetAppDirectory(const std::string& app_directory);
 [[nodiscard]] const std::filesystem::path& GetLegacyPath(EmuPath legacy_path);
 
 /**
- * Shader caches live in a "lichii-shaders" folder beside the AppImage when Lichii runs from a
- * writable folder as an AppImage and no portable user folder is in use
- * (LICHII_APPIMAGE_SHADERS=0 keeps the usual cache folder).
+ * Shader caches live in a "lichii-shaders" folder beside the AppImage (Linux) or lichii.exe
+ * (Windows) when that folder is writable and no portable user folder is in use
+ * (LICHII_APPIMAGE_SHADERS=0 or LICHII_EXE_SHADERS=0 keeps the usual cache folder).
  *
- * @returns Whether ShaderDir is beside the AppImage.
+ * @returns Whether ShaderDir is beside the AppImage or lichii.exe.
  */
 [[nodiscard]] bool IsShaderDirBesideAppImage();
 
@@ -259,12 +259,14 @@ void UseHomeShaderDir();
 /// The shader folder Lichii uses when it is not beside the AppImage.
 [[nodiscard]] const std::filesystem::path& GetHomeShaderDir();
 
-/// Mesa's own shader cache folder (MESA_SHADER_CACHE_DIR) used beside the AppImage, or empty.
+/// The driver's own shader cache folder: Mesa's (MESA_SHADER_CACHE_DIR) beside the AppImage, or
+/// on Windows AMD's (AMD_SHADER_DISK_CACHE_PATH) when the shaders are next to lichii.exe. Empty
+/// otherwise.
 [[nodiscard]] std::filesystem::path GetDriverShaderCacheDir();
 
 /**
- * Points Mesa's shader cache at GetDriverShaderCacheDir() unless the user set
- * MESA_SHADER_CACHE_DIR. Call before the Vulkan driver is loaded.
+ * Points the driver's shader cache at GetDriverShaderCacheDir() unless the user set
+ * MESA_SHADER_CACHE_DIR or AMD_SHADER_DISK_CACHE_PATH. Call before the Vulkan driver is loaded.
  */
 void ConfigureDriverShaderCache();
 
