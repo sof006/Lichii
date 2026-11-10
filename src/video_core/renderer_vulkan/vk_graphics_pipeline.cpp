@@ -725,8 +725,10 @@ GraphicsPipeline::GraphicsPipeline(
                 for (vk::ShaderModule& module : spv_modules) {
                     module.reset();
                 }
-            } else if (FastFirstBuildEnabled() && worker_only_build && build_jobs &&
-                       !mesh_emulation) {
+            } else if (FastFirstBuildEnabled(device.GetDriverID() ==
+                                             VK_DRIVER_ID_AMD_PROPRIETARY) &&
+                       worker_only_build && build_jobs && !mesh_emulation &&
+                       !(binaries && binaries->HasStoredGraphics(GraphicsRecordKey(key)))) {
                 // Mesh emulation builds its compute pipelines inside MakePipeline, so
                 // it is built once.
                 // Draw with the unoptimized pipeline as soon as the driver returns it; the

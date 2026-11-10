@@ -340,7 +340,9 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
 
     auto func{[this, shader_notify, pipeline_statistics] {
         try {
-            if (FastFirstBuildEnabled() && jobs) {
+            if (FastFirstBuildEnabled(device.GetDriverID() == VK_DRIVER_ID_AMD_PROPRIETARY) &&
+                jobs && !BuildsUnoptimized(device.GetDriverID(), shader_hash) &&
+                !(binaries && binaries->HasStoredCompute(binary_key))) {
                 // Dispatch with the unoptimized pipeline as soon as the driver returns it; the
                 // optimized one follows as a Background job and takes its place at a later
                 // dispatch (Configure). The module stays until then. A job still queued when the

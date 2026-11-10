@@ -112,6 +112,9 @@ public:
         return discarded;
     }
 
+    /// Whether the file holds a stored, unrejected payload for this pipeline.
+    [[nodiscard]] bool HasStored(RecordKind kind, u64 key) const;
+
     /// The stored payload of this pipeline, read from the file. Empty when there is none, or it is
     /// damaged (which counts as rejected).
     [[nodiscard]] std::optional<std::vector<u8>> Find(RecordKind kind, u64 key);

@@ -19,17 +19,20 @@
 
 namespace Vulkan {
 
-/// EDEN_NX2_FAST_FIRST=1: a pipeline built while the game runs is first created with
+/// EDEN_NX2_FAST_FIRST=0/1: a pipeline built while the game runs is first created with
 /// VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT and drawn with as soon as the driver returns it;
-/// the optimized build follows on a worker and takes its place at a later draw. Trades the seconds
-/// the driver spends on the heaviest pipelines (a demanding Switch 2 test title, first visit:
-/// draws held up to 7 s of every 10 s) for a slower shader during that time.
-inline bool FastFirstBuildEnabled() {
-    static const bool enabled = [] {
+/// the optimized build follows on a worker and takes its place at a later draw. Enabled by default
+/// when `default_on` holds (AMD proprietary Vulkan on Windows, where monolithic LLPC builds stay
+/// in use because graphics pipeline libraries crash amdvlk64.dll).
+inline bool FastFirstBuildEnabled(bool default_on = false) {
+    static const int override_mode = [] {
         const char* value = std::getenv("EDEN_NX2_FAST_FIRST");
-        return value && *value && *value != '0';
+        if (!value || !*value) {
+            return -1;
+        }
+        return *value == '0' ? 0 : 1;
     }();
-    return enabled;
+    return override_mode >= 0 ? (override_mode == 1) : default_on;
 }
 
 /// EDEN_NX2_HEAVY_SKIP: a native pipeline of at least this many converted instructions (all

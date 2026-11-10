@@ -38,6 +38,9 @@ public:
     [[nodiscard]] vk::Pipeline CreateComputePipeline(const VkComputePipelineCreateInfo& ci,
                                                      VkPipelineCache cache, u64 key);
 
+    [[nodiscard]] bool HasStoredGraphics(u64 key) const;
+    [[nodiscard]] bool HasStoredCompute(u64 key) const;
+
     [[nodiscard]] VideoCommon::ShaderCacheV2::DriverBlobCounts Counts() const {
         return store.Counts();
     }

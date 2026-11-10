@@ -226,6 +226,14 @@ vk::Pipeline PipelineBinaries::CreateComputePipeline(const VkComputePipelineCrea
     return Create(ci, cache, RecordKind::ComputeBinary, key);
 }
 
+bool PipelineBinaries::HasStoredGraphics(u64 key) const {
+    return store.HasStored(RecordKind::GraphicsBinary, key);
+}
+
+bool PipelineBinaries::HasStoredCompute(u64 key) const {
+    return store.HasStored(RecordKind::ComputeBinary, key);
+}
+
 void PipelineBinaries::LogCounts(std::string_view when) const {
     const ShaderCacheV2::DriverBlobCounts counts = Counts();
     LOG_INFO(Render_Vulkan,

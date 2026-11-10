@@ -153,6 +153,15 @@ DriverBlobStore::~DriverBlobStore() {
     Close();
 }
 
+bool DriverBlobStore::HasStored(RecordKind kind, u64 key) const {
+    std::scoped_lock lock{mutex};
+    if (closed) {
+        return false;
+    }
+    const auto it = index.find({kind, key});
+    return it != index.end() && it->second.state == State::Stored;
+}
+
 std::optional<std::vector<u8>> DriverBlobStore::Find(RecordKind kind, u64 key) {
     std::scoped_lock lock{mutex};
     const auto it = index.find({kind, key});
