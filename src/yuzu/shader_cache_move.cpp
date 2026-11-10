@@ -79,10 +79,15 @@ void Touch(const fs::path& path) {
 
 /// The folder Mesa uses without MESA_SHADER_CACHE_DIR (see disk_cache_os.c).
 fs::path HomeMesaCacheDir() {
+#ifdef _WIN32
+    // Mesa's cache is a Linux folder; OfferMove never gets here without an AppImage.
+    return {};
+#else
     if (const char* xdg = std::getenv("XDG_CACHE_HOME"); xdg != nullptr && xdg[0] == '/') {
         return fs::path{xdg} / MESA_DB_DIR;
     }
     return Common::FS::GetHomeDirectory() / ".cache" / MESA_DB_DIR;
+#endif
 }
 
 class Copier {
