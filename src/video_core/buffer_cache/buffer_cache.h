@@ -971,7 +971,7 @@ void BufferCache<P>::NoteReadBack(DAddr begin, DAddr end, bool gpu_modified) {
                 if (!gpu_modified) {
                     continue;
                 }
-                if (read_back_pages.size() >= MaxReadBackPages) {
+                if (read_back_pages.size() >= MaxReadBackPages()) {
                     // The page whose writes were read longest ago makes room.
                     read_back_pages.erase(
                         std::ranges::min_element(read_back_pages, {}, &ReadBackPage::last_read));
@@ -1163,7 +1163,7 @@ void BufferCache<P>::NoteEarlyLanded(const ReadDownload& download,
                                      const Common::RangeSet<DAddr>& cpu_written) {
     // Pages no read came for since keep theirs until a download lands there. Bounded: past it,
     // their reads are not compared.
-    if (early_landed.size() >= 4 * MaxReadBackPages) {
+    if (early_landed.size() >= 4 * MaxReadBackPages()) {
         early_landed.clear();
     }
     const u64 landed_at = read_check_event_count;

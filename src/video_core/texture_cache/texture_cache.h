@@ -3911,12 +3911,34 @@ void TextureCache<P>::UnregisterImage(ImageId image_id) {
 }
 
 template <class P>
+void TextureCache<P>::ArmImageReadTraps(ImageBase& image) {
+    if (True(image.flags & ImageFlagBits::Unbacked)) {
+        return;
+    }
+    if (False(image.flags & ImageFlagBits::Sparse)) {
+        if (image.cpu_addr < ~(1ULL << 40)) {
+            device_memory.ArmReadTraps(image.cpu_addr, image.guest_size_bytes);
+        }
+        return;
+    }
+    ForEachSparseSegment(image,
+                         [this]([[maybe_unused]] GPUVAddr gpu_addr, DAddr cpu_addr, size_t size) {
+                             device_memory.ArmReadTraps(cpu_addr, size);
+                         });
+}
+
+template <class P>
 void TextureCache<P>::TrackImage(ImageBase& image, ImageId image_id) {
     ASSERT(False(image.flags & ImageFlagBits::Tracked));
     image.flags |= ImageFlagBits::Tracked;
+    const bool arm_read_traps = True(image.flags & ImageFlagBits::GpuModified) &&
+                                False(image.flags & ImageFlagBits::Unbacked);
     if (False(image.flags & ImageFlagBits::Sparse)) {
         if (image.cpu_addr < ~(1ULL << 40)) {
             device_memory.UpdatePagesCachedCount(image.cpu_addr, image.guest_size_bytes, 1);
+            if (arm_read_traps) {
+                device_memory.ArmReadTraps(image.cpu_addr, image.guest_size_bytes);
+            }
         }
         return;
     }
@@ -3929,12 +3951,19 @@ void TextureCache<P>::TrackImage(ImageBase& image, ImageId image_id) {
             const DAddr cpu_addr = map.cpu_addr;
             const std::size_t size = map.size;
             device_memory.UpdatePagesCachedCount(cpu_addr, size, 1);
+            if (arm_read_traps) {
+                device_memory.ArmReadTraps(cpu_addr, size);
+            }
         }
         return;
     }
     ForEachSparseSegment(image,
-                         [this]([[maybe_unused]] GPUVAddr gpu_addr, DAddr cpu_addr, size_t size) {
+                         [this, arm_read_traps]([[maybe_unused]] GPUVAddr gpu_addr, DAddr cpu_addr,
+                                                size_t size) {
                              device_memory.UpdatePagesCachedCount(cpu_addr, size, 1);
+                             if (arm_read_traps) {
+                                 device_memory.ArmReadTraps(cpu_addr, size);
+                             }
                          });
 }
 
@@ -4120,9 +4149,13 @@ void TextureCache<P>::RemoveFramebuffers(std::span<const ImageViewId> removed_vi
 }
 
 template <class P>
-void TextureCache<P>::MarkModification(ImageBase& image) noexcept {
+void TextureCache<P>::MarkModification(ImageBase& image) {
+    const bool was_gpu_modified = True(image.flags & ImageFlagBits::GpuModified);
     image.flags |= ImageFlagBits::GpuModified;
     SetModificationTick(slot_images, image, ++modification_tick);
+    if (!was_gpu_modified && True(image.flags & ImageFlagBits::Tracked)) {
+        ArmImageReadTraps(image);
+    }
 }
 
 template <class P>
@@ -4165,7 +4198,11 @@ void TextureCache<P>::SynchronizeAliases(ImageId image_id) {
     SetModificationTick(slot_images, image, most_recent_tick);
     image.newest_alias_tick = most_recent_tick;
     if (any_modified) {
+        const bool was_gpu_modified = True(image.flags & ImageFlagBits::GpuModified);
         image.flags |= ImageFlagBits::GpuModified;
+        if (!was_gpu_modified && True(image.flags & ImageFlagBits::Tracked)) {
+            ArmImageReadTraps(image);
+        }
     }
     std::ranges::sort(aliased_images, [this](const AliasedImage* lhs, const AliasedImage* rhs) {
         const ImageBase& lhs_image = slot_images[lhs->id];

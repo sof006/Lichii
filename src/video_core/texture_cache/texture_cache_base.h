@@ -550,6 +550,9 @@ private:
     /// Track CPU reads and writes for image
     void TrackImage(ImageBase& image, ImageId image_id);
 
+    /// Arm one-shot CPU read traps over a GPU-modified image's guest backing
+    void ArmImageReadTraps(ImageBase& image);
+
     /// Stop tracking CPU reads and writes for image
     void UntrackImage(ImageBase& image, ImageId image_id);
 
@@ -569,7 +572,7 @@ private:
     void RemoveFramebuffers(std::span<const ImageViewId> removed_views);
 
     /// Mark an image as modified from the GPU
-    void MarkModification(ImageBase& image) noexcept;
+    void MarkModification(ImageBase& image);
 
     /// Synchronize image aliases, copying data if needed
     void SynchronizeAliases(ImageId image_id);

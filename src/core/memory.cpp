@@ -502,15 +502,7 @@ struct Memory::Impl {
 
         if (current_page_table->fastmem_arena) {
             Common::MemoryPermission perm{};
-            // EDEN_NX2_NO_REACTIVE=1 drops the read traps on Switch 2 programs. Opt-in: without
-            // them a CPU read of GPU-written memory can see stale data.
-            static const bool nx2_no_reactive = [] {
-                const char* value = std::getenv("EDEN_NX2_NO_REACTIVE");
-                return value != nullptr && value[0] == '1';
-            }();
-            const bool reactive_flushing =
-                Settings::values.use_reactive_flushing.GetValue() &&
-                !(nx2_no_reactive && Settings::CurrentProgramIsSwitch2());
+            const bool reactive_flushing = BlanketReactiveFlushing();
             if (!reactive_flushing || !cached) {
                 perm |= Common::MemoryPermission::Read;
             }
@@ -581,18 +573,54 @@ struct Memory::Impl {
         }
     }
 
-    /// Read traps replace reactive flushing's blanket read protection of every cached page: only
-    /// pages the GPU writes are protected, and each one only until its first read
-    /// (EDEN_NX2_READ_TRAPS=0 turns them off). Under NCE every fault is taken as a write, so they
-    /// are not used there.
-    bool ReadTrapsEnabled() const {
+    static bool Nx2NoReactive() {
+        // EDEN_NX2_NO_REACTIVE=1 drops the read traps on Switch 2 programs. Opt-in: without
+        // them a CPU read of GPU-written memory can see stale data.
+        static const bool nx2_no_reactive = [] {
+            const char* value = std::getenv("EDEN_NX2_NO_REACTIVE");
+            return value != nullptr && value[0] == '1';
+        }();
+        return nx2_no_reactive;
+    }
+
+    bool SelectiveReadTrapsSupported() const {
         static const bool disabled = [] {
             const char* value = std::getenv("EDEN_NX2_READ_TRAPS");
             return value != nullptr && value[0] == '0';
         }();
         return !disabled && current_page_table->fastmem_arena &&
-               !Settings::values.use_reactive_flushing.GetValue() &&
                Settings::values.cpu_backend.GetValue() != Settings::CpuBackend::Nce;
+    }
+
+    bool BlanketReactiveFlushing() const {
+        static const bool nx2_blanket_reactive = [] {
+            const char* value = std::getenv("EDEN_NX2_BLANKET_REACTIVE");
+            return value != nullptr && value[0] == '1';
+        }();
+        if (!Settings::values.use_reactive_flushing.GetValue()) {
+            return false;
+        }
+        if (Settings::CurrentProgramIsSwitch2()) {
+            if (Nx2NoReactive()) {
+                return false;
+            }
+            if (!nx2_blanket_reactive && SelectiveReadTrapsSupported()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// Read traps replace reactive flushing's blanket read protection of every cached page: only
+    /// pages the GPU writes are protected, and each one only until its first read
+    /// (EDEN_NX2_READ_TRAPS=0 turns them off; Switch 2 programs use them by default unless
+    /// EDEN_NX2_BLANKET_REACTIVE=1 is set). Under NCE every fault is taken as a write, so they
+    /// are not used there.
+    bool ReadTrapsEnabled() const {
+        if (Settings::CurrentProgramIsSwitch2() && Nx2NoReactive()) {
+            return false;
+        }
+        return SelectiveReadTrapsSupported() && !BlanketReactiveFlushing();
     }
 
     void RasterizerArmReadTraps(u64 vaddr, u64 size) {
@@ -648,10 +676,26 @@ struct Memory::Impl {
         }
         std::scoped_lock lk{read_trap_mutex};
         const u64 page_end = ((vaddr + size - 1) >> YUZU_PAGEBITS) + 1;
+        u64 run_begin = 0;
+        u64 run_pages = 0;
+        const auto protect_run = [&] {
+            if (run_pages > 0) {
+                host_buffer->Protect(run_begin << YUZU_PAGEBITS, run_pages << YUZU_PAGEBITS,
+                                     Common::MemoryPermission{});
+                run_pages = 0;
+            }
+        };
         for (auto it = armed_read_traps.lower_bound(vaddr >> YUZU_PAGEBITS);
              it != armed_read_traps.end() && *it < page_end; ++it) {
-            host_buffer->Protect(*it << YUZU_PAGEBITS, YUZU_PAGESIZE, Common::MemoryPermission{});
+            if (run_pages > 0 && *it != run_begin + run_pages) {
+                protect_run();
+            }
+            if (run_pages == 0) {
+                run_begin = *it;
+            }
+            ++run_pages;
         }
+        protect_run();
     }
 
     /// A slow-path read of a cached page: its trap, if any, has done its job.
@@ -661,14 +705,30 @@ struct Memory::Impl {
         }
         std::scoped_lock lk{read_trap_mutex};
         const u64 page_end = ((vaddr + size - 1) >> YUZU_PAGEBITS) + 1;
+        u64 run_begin = 0;
+        u64 run_pages = 0;
+        const auto disarm_run = [&] {
+            if (run_pages > 0) {
+                // Still cached (this read came through the rasterizer path): writes stay trapped.
+                host_buffer->Protect(run_begin << YUZU_PAGEBITS, run_pages << YUZU_PAGEBITS,
+                                     Common::MemoryPermission::Read);
+                armed_read_trap_count.fetch_sub(run_pages, std::memory_order_relaxed);
+                run_pages = 0;
+            }
+        };
         auto it = armed_read_traps.lower_bound(vaddr >> YUZU_PAGEBITS);
         while (it != armed_read_traps.end() && *it < page_end) {
-            // Still cached (this read came through the rasterizer path): writes stay trapped.
-            host_buffer->Protect(*it << YUZU_PAGEBITS, YUZU_PAGESIZE,
-                                 Common::MemoryPermission::Read);
+            const u64 page = *it;
+            if (run_pages > 0 && page != run_begin + run_pages) {
+                disarm_run();
+            }
+            if (run_pages == 0) {
+                run_begin = page;
+            }
+            ++run_pages;
             it = armed_read_traps.erase(it);
-            armed_read_trap_count.fetch_sub(1, std::memory_order_relaxed);
         }
+        disarm_run();
     }
 
     /**
