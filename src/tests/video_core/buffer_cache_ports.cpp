@@ -413,8 +413,8 @@ struct BasicFixture {
         auto& table = process->GetPageTable().GetImpl();
         table.Resize(24, 12);
         bytes = physical.GetPointerFromRaw<u8>(0x10000);
-        std::memset(bytes, 0, 0x40000);
-        for (u64 page = 0; page < 64; ++page) {
+        std::memset(bytes, 0, 0x80000);
+        for (u64 page = 0; page < 128; ++page) {
             table.entries.GetAndFault(0x10 + page)
                 .Store(false, Common::PageType::Memory, 1,
                        reinterpret_cast<uintptr_t>(bytes) - 0x10000);
@@ -422,14 +422,14 @@ struct BasicFixture {
         process->GetMemory().SetCurrentPageTable(*process);
         asid = device.RegisterProcess(&process->GetMemory());
         device.BindInterface(&rasterizer);
-        device.Map(0x10000, 0x10000, 0x40000, asid);
+        device.Map(0x10000, 0x10000, 0x80000, asid);
         ResetMemory();
         cache = std::make_unique<C>(device, runtime);
     }
     ~BasicFixture() {
         cache.reset();
         memory.reset();
-        device.Unmap(0x10000, 0x40000);
+        device.Unmap(0x10000, 0x80000);
         device.UnregisterProcess(asid);
         system.Kernel().UnregisterKernelObject(process.get());
     }
@@ -1693,33 +1693,33 @@ TEST_CASE("Finished early downloads land a few draws later, or at the next dispa
     REQUIRE(ReadWord(f, 0x20010).preemtive);
 }
 
-TEST_CASE("Early downloads stop at 32 on their way", "[buffer_ports]") {
+TEST_CASE("Early downloads stop at 64 on their way", "[buffer_ports]") {
     Fixture f;
     const Nx2TitleScope nx2_title;
-    const auto id = Access::Add(*f.cache, 0x20000, 0x30000);
-    // 33 pages, each read after two writes.
+    const auto id = Access::Add(*f.cache, 0x20000, 0x50000);
+    // 65 pages, each read after two writes.
     for (u8 frame = 1; frame <= 2; ++frame) {
-        for (DAddr page = 0x20000; page < 0x41000; page += 0x1000) {
+        for (DAddr page = 0x20000; page < 0x61000; page += 0x1000) {
             WriteByDispatch(f, id, page, 0x100, frame);
             ReadWord(f, page);
         }
     }
-    // Their next writes before the host GPU ran any copy: the 33rd page's read flushes.
-    for (DAddr page = 0x20000; page < 0x41000; page += 0x1000) {
+    // Their next writes before the host GPU ran any copy: the 65th page's read flushes.
+    for (DAddr page = 0x20000; page < 0x61000; page += 0x1000) {
         WriteByDispatch(f, id, page, 0x100, 3);
     }
-    REQUIRE(f.runtime.queued_host_reads == 32);
-    REQUIRE(Access::ReadDownloads(*f.cache) == 32);
-    const auto last = ReadWord(f, 0x40010);
+    REQUIRE(f.runtime.queued_host_reads == 64);
+    REQUIRE(Access::ReadDownloads(*f.cache) == 64);
+    const auto last = ReadWord(f, 0x60010);
     REQUIRE_FALSE(last.preemtive);
     REQUIRE_FALSE(last.in_flight);
-    REQUIRE(f.bytes[0x30010] == 3);
+    REQUIRE(f.bytes[0x50010] == 3);
     REQUIRE(f.bytes[0x10010] == 3);
     REQUIRE(Access::ReadDownloads(*f.cache) == 0);
-    REQUIRE_FALSE(Access::Pending(*f.cache, 0x20000, 0x21000));
+    REQUIRE_FALSE(Access::Pending(*f.cache, 0x20000, 0x41000));
 }
 
-TEST_CASE("Early downloads stop at 1 MiB a frame", "[buffer_ports]") {
+TEST_CASE("Early downloads stop at 4 MiB a frame", "[buffer_ports]") {
     Fixture f;
     const Nx2TitleScope nx2_title;
     const auto id = Access::Add(*f.cache, 0x20000, 0x10000);
@@ -1727,16 +1727,16 @@ TEST_CASE("Early downloads stop at 1 MiB a frame", "[buffer_ports]") {
         WriteByDispatch(f, id, 0x20000, 0x1000, frame);
         ReadWord(f, 0x20010);
     }
-    // A whole page each, read once the host GPU ran it: 256 make 1 MiB.
-    for (u32 write = 0; write < 256; ++write) {
+    // A whole page each, read once the host GPU ran it: 1024 make 4 MiB.
+    for (u32 write = 0; write < 1024; ++write) {
         WriteByDispatch(f, id, 0x20000, 0x1000, static_cast<u8>(write));
         f.runtime.Complete(f.runtime.submitted_tick);
         REQUIRE(ReadWord(f, 0x20010).preemtive);
     }
-    REQUIRE(f.runtime.queued_host_reads == 256);
+    REQUIRE(f.runtime.queued_host_reads == 1024);
     // The frame's later writes leave their reads to flush.
     WriteByDispatch(f, id, 0x20000, 0x1000, 0xab);
-    REQUIRE(f.runtime.queued_host_reads == 256);
+    REQUIRE(f.runtime.queued_host_reads == 1024);
     const auto area = ReadWord(f, 0x20010);
     REQUIRE_FALSE(area.preemtive);
     REQUIRE_FALSE(area.in_flight);
