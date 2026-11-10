@@ -4602,6 +4602,27 @@ void MainWindow::OnGameListPrepareShaderWarm(u64 program_id, const std::string& 
     shader_warm_dialog =
         new ShaderWarmDialog(*QtCommon::system, path, program_id, GameTitleName(game_path), this);
     connect(shader_warm_dialog, &QDialog::finished, shader_warm_dialog, &QObject::deleteLater);
+    // This only prepares the files: the shaders are built on the loading screen, with Precache
+    // shaders before game start on.
+    connect(shader_warm_dialog, &ShaderWarmDialog::BuildFinished, this, [this](bool ok) {
+        auto& precache = Settings::values.precache_shaders;
+        if (!ok || precache.GetValue() != Settings::PrecacheShaders::Off ||
+            !precache.UsingGlobal()) {
+            return;
+        }
+        const auto answer = QMessageBox::question(
+            this, tr("Precache Shaders"),
+            tr("The precache files are ready, but the shaders are built only on the loading "
+               "screen, with Precache shaders before game start on (Configure, Graphics, "
+               "Advanced). It is off.\n\nTurn it on?"),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+        LOG_INFO(Frontend, "Precache shaders before game start turned on from the game list: {}",
+                 answer == QMessageBox::Yes ? "yes" : "no");
+        if (answer == QMessageBox::Yes) {
+            precache.SetValue(Settings::PrecacheShaders::Always);
+            config->SaveAllValues();
+        }
+    });
     shader_warm_dialog->show();
     shader_warm_dialog->Start();
 }
