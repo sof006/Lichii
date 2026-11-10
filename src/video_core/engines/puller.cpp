@@ -332,19 +332,31 @@ void NoteResumed(const void* waiter, const Puller::PendingAcquire& acquire,
 // back ran everything before the acquire: the release that work runs then counts as it did (the
 // waiter is registered), and acquires the queued work releases send none.
 void MaybeReleaseFences(DmaPusher& dma_pusher, Puller::PendingAcquire& acquire) {
-    if (!VideoCommon::GpuSplit::Get().Ran(acquire.sent_at)) {
-        return;
-    }
     if (VideoCommon::GpuSplit::HighView()) {
-        // Delayed fence operations (High): a release queued after the acquire waits for the next
-        // fence, and with every channel waiting none comes. Release them now and then, as the
-        // drain path does (CanResumeAcquire).
+        // Delayed fence operations (High): a release without a fence flag waits for the next
+        // fence (CounterReport's SyncOperation), and the channel that would send it waits here.
+        // At once, a fence after the work sent so far, the release among it: the fencing thread
+        // lands it as soon as the host GPU passed it, without the back waiting for that. Then
+        // now and then a fence the back waits for, as the drain path does (CanResumeAcquire).
+        if (!acquire.fences_released) {
+            acquire.fences_released = true;
+            acquire.last_fences = std::chrono::steady_clock::now();
+            OnBack([rasterizer = dma_pusher.rasterizer] { rasterizer->SignalReference(); },
+                   FenceWrites);
+            return;
+        }
+        if (!VideoCommon::GpuSplit::Get().Ran(acquire.sent_at)) {
+            return;
+        }
         const auto now = std::chrono::steady_clock::now();
         if (now - acquire.last_fences < std::chrono::milliseconds{1}) {
             return;
         }
         acquire.last_fences = now;
-    } else if (acquire.fences_released) {
+        OnBack([rasterizer = dma_pusher.rasterizer] { rasterizer->ReleaseFences(); }, FenceWrites);
+        return;
+    }
+    if (acquire.fences_released || !VideoCommon::GpuSplit::Get().Ran(acquire.sent_at)) {
         return;
     }
     acquire.fences_released = true;
