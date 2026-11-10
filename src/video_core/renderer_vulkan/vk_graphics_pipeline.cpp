@@ -699,8 +699,9 @@ GraphicsPipeline::GraphicsPipeline(
                     library_cache->RecordFallback();
                     FallBackToMonolithic(render_pass);
                 }
-                if (made && !libraries_only && GplOptimizeEnabled() &&
-                    device.CanFastLinkGraphicsLibraries() && build_jobs) {
+                if (made && !libraries_only && build_jobs &&
+                    ((GplOptimizeEnabled() && device.CanFastLinkGraphicsLibraries()) ||
+                     device.FastLinkUntilOptimized())) {
                     // Optimized link on its own low-priority pool, swapped in at a later draw
                     // (ConfigureDraw) like the fast first build's optimized pipeline. Dropped if
                     // the pipeline goes away before the link started (drop_unstarted, or a
@@ -2698,7 +2699,11 @@ bool GraphicsPipeline::MakeLibraryPipeline(VkRenderPass render_pass) {
         .basePipelineHandle = nullptr,
         .basePipelineIndex = 0,
     }, *pipeline_cache);
-    pipeline = LinkLibraries(render_pass, !device.CanFastLinkGraphicsLibraries());
+    // Built while the game runs (build_jobs), a pipeline is fast linked until its optimized link
+    // is in (FastLinkUntilOptimized); on the loading screen it is linked optimized.
+    const bool fast_link = device.CanFastLinkGraphicsLibraries() ||
+                           (build_jobs != nullptr && device.FastLinkUntilOptimized());
+    pipeline = LinkLibraries(render_pass, !fast_link);
     linked = true;
     return true;
 }

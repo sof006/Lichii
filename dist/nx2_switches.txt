@@ -55,3 +55,11 @@ EDEN_NX2_FENCE_BATCH=1
 # Threads of the shader precache on the loading screen, 1 to 64 (wins over the setting, whose
 # default 0 uses every CPU thread).
 #EDEN_NX2_WARM_THREADS=4
+# AMD's Windows driver, with Shader libraries on: a pipeline built while the game runs is fast
+# linked and drawn at once, and its optimized link (as long as a full build there, 0.5-5 s for a
+# heavy pipeline) follows in the background. Alpha blended effects may show white fringes until
+# it is in. =0 makes the draws wait for the optimized link instead: no fringes, but the game
+# freezes meanwhile.
+#EDEN_NX2_GPL_FAST_LINK=0
+# Threads for those background optimized links (default 1).
+#EDEN_NX2_GPL_OPTIMIZE_THREADS=2

@@ -398,14 +398,30 @@ public:
     /// and monolithic pipelines from the same SPIR-V do not, so libraries are linked optimized
     /// there. EDEN_NX2_GPL_FAST_LINK=1 allows fast links on any driver, =0 on none.
     bool CanFastLinkGraphicsLibraries() const {
-        static const char forced = [] {
-            const char* value = std::getenv("EDEN_NX2_GPL_FAST_LINK");
-            return value == nullptr ? '\0' : value[0];
-        }();
+        const char forced = GplFastLinkSwitch();
         if (forced == '0' || forced == '1') {
             return forced == '1';
         }
         return GetDriverID() != VK_DRIVER_ID_AMD_PROPRIETARY;
+    }
+
+    /// Where fast links draw wrong (CanFastLinkGraphicsLibraries), a pipeline built while the
+    /// game runs is fast linked anyway and drawn at once, and its optimized link follows in the
+    /// background and takes its place. An optimized link there takes as long as a full build
+    /// (0.5-5 s for a heavy pipeline), and every draw waited for it: the game froze. The fringes
+    /// last only until the optimized pipeline is in. Pipelines built on the loading screen stay
+    /// optimized. On with EDEN_NX2_GPL_FAST_LINK unset; =0 waits for the optimized link again.
+    bool FastLinkUntilOptimized() const {
+        return GplFastLinkSwitch() == '\0' && !CanFastLinkGraphicsLibraries();
+    }
+
+    /// First character of EDEN_NX2_GPL_FAST_LINK, '\0' when unset.
+    static char GplFastLinkSwitch() {
+        static const char forced = [] {
+            const char* value = std::getenv("EDEN_NX2_GPL_FAST_LINK");
+            return value == nullptr ? '\0' : value[0];
+        }();
+        return forced;
     }
 
     /// Returns true for tile-based deferred renderers.
