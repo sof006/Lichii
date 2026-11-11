@@ -231,6 +231,13 @@ public:
         return state->complete.load(std::memory_order_acquire);
     }
 
+    /// Moves a build still waiting in the shader job scheduler up to `priority`.
+    void Promote(VideoCommon::ShaderJobPriority priority) const {
+        if (jobs && !IsBuilt()) {
+            jobs->Promote(handle, priority);
+        }
+    }
+
     bool Failed() const {
         return IsBuilt() && state->failed;
     }

@@ -2644,7 +2644,7 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) {
                          .count());
             pipeline->heavy_skipped_draws = 0;
         }
-        return pipeline;
+        return SkipUnoptimizedBlend(pipeline) ? nullptr : pipeline;
     }
     if (!use_asynchronous_shaders) {
         return pipeline;
@@ -2763,6 +2763,59 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) {
         }
     }
     return discard ? nullptr : pipeline;
+}
+
+/// On AMD's Windows driver a pipeline drawn with its unoptimized first build (fast first build, or
+/// a fast link) draws white outlines around alpha blended effects (smoke, particles, glows) until
+/// the optimized build is in. With asynchronous shaders on, a blended draw with such a pipeline is
+/// skipped as a draw whose pipeline is still building would be (when that draw may be skipped),
+/// and its optimized build moves ahead of the background builds. Opaque draws keep the unoptimized
+/// build. EDEN_NX2_UNOPTIMIZED_BLENDS=1 draws blended effects with it anyway.
+bool PipelineCache::SkipUnoptimizedBlend(GraphicsPipeline* pipeline) {
+    static const bool draw_anyway = [] {
+        const char* value = std::getenv("EDEN_NX2_UNOPTIMIZED_BLENDS");
+        return value != nullptr && value[0] == '1';
+    }();
+    if (draw_anyway || !use_asynchronous_shaders ||
+        device.GetDriverID() != VK_DRIVER_ID_AMD_PROPRIETARY || !pipeline->DrawsUnoptimized()) {
+        return false;
+    }
+    const auto& regs = maxwell3d->regs;
+    bool blends = false;
+    const size_t targets = std::min<size_t>(regs.rt_control.count, Maxwell::NumRenderTargets);
+    for (size_t index = 0; index < targets; ++index) {
+        if (regs.rt[index].format != Tegra::RenderTargetFormat::NONE &&
+            regs.blend.enable[index] != 0) {
+            blends = true;
+            break;
+        }
+    }
+    if (!blends) {
+        return false;
+    }
+    // The same rule as for a draw whose pipeline is still building (BuiltPipeline).
+    const bool native = maxwell3d->GetNativeMacroEngine().native_turing;
+    static const bool discard_native = [] {
+        const char* value = std::getenv("EDEN_NX2_ASYNC_DISCARD");
+        return value != nullptr && value[0] == '1';
+    }();
+    const bool native_may_skip =
+        discard_native ||
+        Settings::values.native_async_draws.GetValue() != Settings::NativeAsyncDraws::Wait;
+    const auto& draw_state = maxwell3d->draw_manager.draw_state;
+    if (!CanDiscardPendingDraw(native, regs.zeta_enable != 0, draw_state.draw_element_count,
+                               draw_state.draw_element_count, native && native_may_skip)) {
+        return false;
+    }
+    pipeline->HurryOptimized();
+    static std::atomic<u64> skipped{};
+    if ((skipped.fetch_add(1, std::memory_order_relaxed) & 255) == 0) {
+        LOG_INFO(Render_Vulkan,
+                 "Nx2Perf unoptimized_blend: {} blended draws skipped until their optimized "
+                 "pipeline is in",
+                 skipped.load(std::memory_order_relaxed));
+    }
+    return true;
 }
 
 /// Translates the key's stages and creates the pipeline, on the library route when it qualifies.

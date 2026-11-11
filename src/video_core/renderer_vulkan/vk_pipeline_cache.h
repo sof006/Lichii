@@ -169,6 +169,7 @@ private:
     /// Returns `pipeline` when it is built or its draw must wait for it, nullptr when the draw
     /// may be skipped while it builds (asynchronous shaders, CanDiscardPendingDraw, heavy skip).
     [[nodiscard]] GraphicsPipeline* BuiltPipeline(GraphicsPipeline* pipeline);
+    [[nodiscard]] bool SkipUnoptimizedBlend(GraphicsPipeline* pipeline);
 
     /// EDEN_NX2_HEAVY_SKIP: the current draw's render target was also drawn to in one of the two
     /// frames before this one, so it is redrawn every frame and a skipped draw only shows for a

@@ -304,6 +304,21 @@ public:
         return build->IsBuilt();
     }
 
+    /// Draws with its unoptimized first build (fast first build or fast link) while the optimized
+    /// one is still building. Only valid once IsBuilt().
+    [[nodiscard]] bool DrawsUnoptimized() const noexcept {
+        return optimized_build.has_value() && !optimized_ready.load(std::memory_order_acquire) &&
+               !optimized_build->IsBuilt();
+    }
+
+    /// Moves the pending optimized build ahead of the background builds, once.
+    void HurryOptimized() {
+        if (!optimized_hurried && optimized_build) {
+            optimized_hurried = true;
+            optimized_build->Promote(VideoCommon::ShaderJobPriority::Soon);
+        }
+    }
+
     /// Builds it on this thread, for a pipeline made with PipelineBuildQueue::owner_builds
     void Build() {
         build->Build();
@@ -521,6 +536,7 @@ private:
     vk::Pipeline retired_pipeline;
     std::atomic_bool optimized_ready{};
     bool optimized_bound{};
+    bool optimized_hurried{}; ///< GPU thread (HurryOptimized)
     /// The build produced a pipeline. Written by the build before it completes, read by the GPU
     /// thread after IsBuilt(), unlike `pipeline`, which the scheduler thread may swap.
     bool has_pipeline{};

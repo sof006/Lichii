@@ -63,3 +63,7 @@ EDEN_NX2_FENCE_BATCH=1
 #EDEN_NX2_GPL_FAST_LINK=0
 # Threads for those background optimized links (default 1).
 #EDEN_NX2_GPL_OPTIMIZE_THREADS=2
+# AMD's Windows driver, with asynchronous shaders on: a see-through effect (smoke, particles,
+# glows) whose pipeline has only its quick unoptimized build is skipped until the optimized build
+# is in, because the quick build draws white outlines around it there. =1 draws it anyway.
+#EDEN_NX2_UNOPTIMIZED_BLENDS=1
