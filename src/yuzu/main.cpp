@@ -31,6 +31,7 @@
 
 #ifdef _WIN32
 #include <QScreen>
+#include "debug_report.h"
 
 static void OverrideWindowsFont() {
     // Qt5 chooses these fonts on Windows and they have fairly ugly alphanumeric/cyrillic characters
@@ -83,6 +84,11 @@ static Qt::HighDpiScaleFactorRoundingPolicy GetHighDpiRoundingPolicy() {
 }
 
 int main(int argc, char* argv[]) {
+#ifdef _WIN32
+    if (DebugReport::RunCrashReportProcess(argc, argv)) {
+        return 0;
+    }
+#endif
     LoadNx2Switches(argv[0]);
 #if YUZU_ROOM
     bool launch_room = false;
@@ -111,6 +117,12 @@ int main(int argc, char* argv[]) {
 
 #ifdef YUZU_CRASH_DUMPS
     Breakpad::InstallCrashHandler();
+#endif
+#ifdef _WIN32
+    // Before the log starts: a session that ended without closing still has its log in place.
+    if (!is_child) {
+        DebugReport::BeginSession();
+    }
 #endif
 
     // Init settings params
@@ -214,5 +226,9 @@ int main(int argc, char* argv[]) {
     main_window.show();
 
     app.connect(&app, &QGuiApplication::applicationStateChanged, &main_window, &MainWindow::OnAppFocusStateChanged);
-    return app.exec();
+    const int result = app.exec();
+#ifdef _WIN32
+    DebugReport::EndSession();
+#endif
+    return result;
 }

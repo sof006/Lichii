@@ -299,6 +299,10 @@ static void RemoveTitlebarFilter() {
 #ifdef YUZU_CRASH_DUMPS
 #include "yuzu/breakpad.h"
 #endif
+#ifdef _WIN32
+#include <QProcess>
+#include "yuzu/debug_report.h"
+#endif
 
 using namespace Common::Literals;
 
@@ -381,6 +385,9 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     : ui{std::make_unique<Ui::MainWindow>()},
       input_subsystem{std::make_shared<InputCommon::InputSubsystem>()}, user_data_migrator{this} {
     QtCommon::Init(this);
+#ifdef _WIN32
+    DebugReport::StartLogFlush();
+#endif
 
     Common::FS::CreateEdenPaths();
     this->config = std::make_unique<QtConfig>();
@@ -1725,6 +1732,23 @@ void MainWindow::ConnectMenuEvents() {
             !Settings::values.recommended_settings_backup.GetValue().empty());
     });
     connect_menu(ui->action_Data_Manager, &MainWindow::OnDataDialog);
+#ifdef _WIN32
+    if (DebugReport::Enabled()) {
+        auto* report_action = new QAction(tr("Save Debug Report"), this);
+        ui->menu_Help->insertAction(ui->action_Log_Folder, report_action);
+        connect(report_action, &QAction::triggered, this, [this] {
+            const auto report = DebugReport::WriteNow(DebugReport::Kind::Manual);
+            if (report.empty()) {
+                QMessageBox::warning(this, tr("Save Debug Report"),
+                                     tr("The debug report could not be written."));
+                return;
+            }
+            const QString path = QString::fromStdWString(report.wstring());
+            QProcess::startDetached(QStringLiteral("explorer.exe"),
+                                    {QStringLiteral("/select,"), QDir::toNativeSeparators(path)});
+        });
+    }
+#endif
 
 #if defined(ENABLE_UPDATE_CHECKER) && (defined(__linux__) || defined(_WIN32))
     auto* restore_action = ui->menu_Help->addAction(tr("Restore Previous Version..."));
@@ -2125,6 +2149,9 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         QtCommon::system->ApplySettings();
     }
 
+#ifdef _WIN32
+    DebugReport::NoteGame(title_id);
+#endif
     if (title_id == Settings::MarioKartWorldProgramId && !asked_recommended_mkw_settings) {
         asked_recommended_mkw_settings = true;
         use_recommended_mkw_settings =

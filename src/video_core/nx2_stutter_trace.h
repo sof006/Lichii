@@ -15,7 +15,8 @@
 
 // EDEN_NX2_STUTTER_TRACE=1: per presented frame, the wall time each GPU thread (front, back,
 // VulkanWorker) spent by category, from the EDEN_NX2_GPU_PROFILE zones (nx2_profile.h maps each
-// zone to a category). Frames presented more than 33 ms after the previous one are logged with
+// zone to a category). Frames presented more than 33 ms (EDEN_NX2_STUTTER_MS) after the previous
+// one are logged with
 // their top category (Nx2Stutter); every 10 s the frame-time histogram, pipeline builds and
 // lookups (Nx2StutterSummary); and the boot phases with the process memory (Nx2Boot).
 // tools/nx2/cache_metrics.py reads them. Frames longer than EDEN_NX2_STUTTER_DETAIL_MS (default

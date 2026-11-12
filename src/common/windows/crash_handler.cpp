@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
+#include <iterator>
 
 #include <windows.h>
 
@@ -32,6 +33,7 @@ MiniDumpWriteDumpFn write_dump{};
 GetThreadDescriptionFn get_thread_description{};
 LPTOP_LEVEL_EXCEPTION_FILTER previous_filter{};
 wchar_t dump_path[MAX_PATH]{};
+wchar_t crash_command[2 * MAX_PATH]{};
 std::atomic<DWORD> reporting_thread{};
 
 struct CodeAddress {
@@ -115,6 +117,23 @@ void Report(EXCEPTION_POINTERS* pointers) {
               written ? "written next to the log as eden_crash.dmp" : "failed", error);
 }
 
+void StartCrashCommand() {
+    if (crash_command[0] == L'\0') {
+        return;
+    }
+    // CreateProcessW may write to the command line.
+    wchar_t command[std::size(crash_command)];
+    std::wmemcpy(command, crash_command, std::size(crash_command));
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (CreateProcessW(nullptr, command, nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup,
+                       &process)) {
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+    }
+}
+
 // Only the first thread to crash reports. A second one waits a while for it to end the process,
 // then falls through to the previous handling, so a report stuck on a lock the second thread
 // holds cannot hang the process. A crash inside the report falls through at once.
@@ -133,6 +152,7 @@ bool BeginReport() {
 LONG WINAPI OnUnhandledException(EXCEPTION_POINTERS* pointers) {
     if (BeginReport()) {
         Report(pointers);
+        StartCrashCommand();
     }
     return previous_filter ? previous_filter(pointers) : EXCEPTION_CONTINUE_SEARCH;
 }
@@ -142,6 +162,7 @@ LONG WINAPI OnUnhandledException(EXCEPTION_POINTERS* pointers) {
 void OnAbort(int) {
     if (BeginReport()) {
         Report(nullptr);
+        StartCrashCommand();
     }
 }
 
@@ -160,6 +181,14 @@ void InstallCrashHandler(const std::filesystem::path& dump_directory) {
         GetProcAddress(GetModuleHandleW(L"KernelBase.dll"), "GetThreadDescription")));
     previous_filter = SetUnhandledExceptionFilter(OnUnhandledException);
     std::signal(SIGABRT, OnAbort);
+}
+
+void SetCrashCommand(const std::wstring& command_line) {
+    if (command_line.size() < std::size(crash_command)) {
+        std::wmemcpy(crash_command, command_line.c_str(), command_line.size() + 1);
+    } else {
+        crash_command[0] = L'\0';
+    }
 }
 
 } // namespace Common::Windows

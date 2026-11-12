@@ -98,6 +98,8 @@ std::atomic<double> g_ticks_per_ms{0.0};
 struct FrameState {
     u64 frames{};
     double detail_ms{50.0};
+    /// Frames longer than this get an Nx2Stutter line (EDEN_NX2_STUTTER_MS).
+    double stutter_ms{StutterMs};
     ZoneTicks zone_ticks{};
     ZoneTicks zone_counts{};
     std::array<u64, SiteCount> site_ticks{};
@@ -417,7 +419,7 @@ void OnPresent() {
         long_sites.swap(g_long_sites);
     }
 
-    if (interval_ms > StutterMs) {
+    if (interval_ms > state.stutter_ms) {
         std::string fields;
         for (size_t index = 0; index < IdleIndex; ++index) {
             fields += fmt::format(" {}={:.1f}", category_names[index], frame.category_ms[index]);
@@ -496,6 +498,9 @@ void StartSession() {
     g_frame = {};
     if (const char* const value = std::getenv("EDEN_NX2_STUTTER_DETAIL_MS")) {
         g_frame.detail_ms = std::strtod(value, nullptr);
+    }
+    if (const char* const value = std::getenv("EDEN_NX2_STUTTER_MS")) {
+        g_frame.stutter_ms = std::strtod(value, nullptr);
     }
     {
         std::scoped_lock lock{g_long_sites_mutex};

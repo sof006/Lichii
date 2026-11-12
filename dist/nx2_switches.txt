@@ -67,3 +67,11 @@ EDEN_NX2_FENCE_BATCH=1
 # glows) whose pipeline has only its quick unoptimized build is skipped until the optimized build
 # is in, because the quick build draws white outlines around it there. =1 draws it anyway.
 #EDEN_NX2_UNOPTIMIZED_BLENDS=1
+# Windows: debug reports in lichii-reports next to lichii.exe (on exit after a game, after a
+# crash, and Help > Save Debug Report), with hitches over 100 ms and shader builds logged.
+# =0 turns them off, and the extra logging with them.
+#LICHII_DEBUG_REPORT=0
+# The extra logging alone: =0 keeps the reports without it.
+#EDEN_NX2_STUTTER_TRACE=0
+# Log every frame over this many ms (default 100 with the reports; 33 makes the log much longer).
+#EDEN_NX2_STUTTER_MS=33

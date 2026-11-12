@@ -4,6 +4,7 @@
 #pragma once
 
 #include <filesystem>
+#include <string>
 
 namespace Common::Windows {
 
@@ -11,5 +12,9 @@ namespace Common::Windows {
 /// address and stack as module+offset, thread), flushes the log and writes
 /// <dump_directory>/eden_crash.dmp. Call after Common::Log::Initialize.
 void InstallCrashHandler(const std::filesystem::path& dump_directory);
+
+/// After a crash report (log line and minidump), starts this command line, for example a process
+/// that packs the log and the dump once this one has ended. Empty: none.
+void SetCrashCommand(const std::wstring& command_line);
 
 } // namespace Common::Windows

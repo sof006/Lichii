@@ -84,6 +84,7 @@ static void LoadNx2Switches(const char* argv0) {
     std::erase_if(entries, [](const auto& entry) {
         const auto& name = entry.first;
         return !(name.starts_with("EDEN_NX2_") || name == "LICHII_EXE_SHADERS" ||
+                 name == "LICHII_DEBUG_REPORT" ||
                  name == "EDEN_DKB_FRAME_TRACE" ||
                  name == "EDEN_DKB_INDIRECT_READBACK" || name == "EDEN_NATIVE_DRAW_CAPTURE" ||
                  name == "EDEN_NATIVE_DRAW_DIAGNOSTICS" || name == "EDEN_NATIVE_FRAME_CAPTURE" ||

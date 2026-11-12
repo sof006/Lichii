@@ -430,7 +430,8 @@ target_link_libraries(yuzu PRIVATE Boost::headers Qt6::Widgets Qt6::Charts Qt6::
 # Unpacks NVIDIA's files from the Streamline release (nvidia_dlss_panel.cpp).
 target_link_libraries(yuzu PRIVATE ZLIB::ZLIB)
 if (WIN32)
-    target_link_libraries(yuzu PRIVATE QuaZip::QuaZip)
+    target_sources(yuzu PRIVATE debug_report.cpp debug_report.h)
+    target_link_libraries(yuzu PRIVATE QuaZip::QuaZip dxgi)
 endif()
 target_link_libraries(yuzu PRIVATE ${PLATFORM_LIBRARIES} Threads::Threads)
 if (ENABLE_OPENGL)
