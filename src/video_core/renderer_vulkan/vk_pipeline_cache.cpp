@@ -2767,9 +2767,10 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) {
 
 /// On AMD's Windows driver a pipeline drawn with its unoptimized first build (fast first build, or
 /// a fast link) draws white outlines around alpha blended effects (smoke, particles, glows) until
-/// the optimized build is in. With asynchronous shaders on, a blended draw, or one that writes no
-/// depth, with such a pipeline is skipped (when that draw may be skipped), and its optimized build
-/// moves ahead of the background builds. Draws writing depth keep the unoptimized build.
+/// the optimized build is in. With asynchronous shaders on, a blended draw with such a pipeline is
+/// skipped (when that draw may be skipped), and its optimized build moves ahead of the background
+/// builds. Opaque draws keep the unoptimized build, and so does a blended one skipped for longer
+/// than EDEN_NX2_UNOPTIMIZED_WAIT_MS (default 250): missing for long is worse than white lines.
 /// EDEN_NX2_UNOPTIMIZED_BLENDS=1 draws effects with it anyway.
 bool PipelineCache::SkipUnoptimizedBlend(GraphicsPipeline* pipeline) {
     static const bool draw_anyway = [] {
@@ -2790,11 +2791,7 @@ bool PipelineCache::SkipUnoptimizedBlend(GraphicsPipeline* pipeline) {
             break;
         }
     }
-    // Effects drawn without blending (heat haze, water ripples) don't write depth either: only
-    // draws that write depth (the scene's geometry) keep the unoptimized build.
-    const bool writes_depth =
-        regs.zeta_enable != 0 && regs.depth_test_enable != 0 && regs.depth_write_enabled != 0;
-    if (!blends && writes_depth) {
+    if (!blends) {
         return false;
     }
     // Unlike a draw whose pipeline is still building (BuiltPipeline), small draws without depth are
@@ -2809,6 +2806,22 @@ bool PipelineCache::SkipUnoptimizedBlend(GraphicsPipeline* pipeline) {
         discard_native ||
         Settings::values.native_async_draws.GetValue() != Settings::NativeAsyncDraws::Wait;
     if (native && !native_may_skip) {
+        return false;
+    }
+    static const auto wait_limit = [] {
+        const char* value = std::getenv("EDEN_NX2_UNOPTIMIZED_WAIT_MS");
+        return std::chrono::milliseconds{value != nullptr && *value != '\0'
+                                             ? std::strtoll(value, nullptr, 10)
+                                             : 250};
+    }();
+    if (pipeline->UnoptimizedSkippedFor(std::chrono::steady_clock::now()) > wait_limit) {
+        static std::atomic<u64> drawn{};
+        if ((drawn.fetch_add(1, std::memory_order_relaxed) & 255) == 0) {
+            LOG_INFO(Render_Vulkan,
+                     "Nx2Perf unoptimized_blend: {} effect draws drawn with the quick build, their "
+                     "optimized pipeline over {} ms late",
+                     drawn.load(std::memory_order_relaxed), wait_limit.count());
+        }
         return false;
     }
     pipeline->HurryOptimized();

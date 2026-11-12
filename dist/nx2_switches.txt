@@ -61,13 +61,15 @@ EDEN_NX2_FENCE_BATCH=1
 # it is in. =0 makes the draws wait for the optimized link instead: no fringes, but the game
 # freezes meanwhile.
 #EDEN_NX2_GPL_FAST_LINK=0
-# Threads for those background optimized links (default 1).
-#EDEN_NX2_GPL_OPTIMIZE_THREADS=2
-# AMD's Windows driver, with asynchronous shaders on: an effect (smoke, particles, glows, heat
-# haze: anything see-through or not writing depth) whose pipeline has only its quick unoptimized
-# build is skipped until the optimized build is in, because the quick build draws white lines
-# there. =1 draws it anyway.
+# Threads for those background optimized links (default 2).
+#EDEN_NX2_GPL_OPTIMIZE_THREADS=4
+# AMD's Windows driver, with asynchronous shaders on: a see-through effect (smoke, particles,
+# glows) whose pipeline has only its quick unoptimized build is hidden until the optimized build
+# is in, because the quick build draws white lines there. =1 draws it anyway.
 #EDEN_NX2_UNOPTIMIZED_BLENDS=1
+# How long such an effect may stay hidden, in ms (default 250); after that it is drawn with the
+# quick build. Higher hides more white lines, but effects may be missing for longer.
+#EDEN_NX2_UNOPTIMIZED_WAIT_MS=500
 # AMD's Windows driver: before a quick unoptimized build or link, the optimized pipeline is taken
 # from the driver's shader cache when the precache or an earlier session built it (no rebuild,
 # no freeze). =0 always makes the quick build first.

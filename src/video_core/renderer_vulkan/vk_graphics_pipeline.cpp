@@ -385,7 +385,7 @@ void ReportTextureMemo() {
     }
 }
 
-/// EDEN_NX2_GPL_OPTIMIZE_THREADS=<n> (default 1): the optimized links of EDEN_NX2_GPL_OPTIMIZE run
+/// EDEN_NX2_GPL_OPTIMIZE_THREADS=<n> (default 2): the optimized links of EDEN_NX2_GPL_OPTIMIZE run
 /// on their own pool of n low-priority threads, so they don't slow down the builds that draws
 /// wait for. 0 returns null: they run as Background jobs of the shader job scheduler instead.
 /// The pool stays a Common::ThreadWorker of its own (not shader jobs) so its thread count and
@@ -394,7 +394,7 @@ Common::ThreadWorker* GplOptimizeWorkers() {
     static const size_t threads = [] {
         const char* const value = std::getenv("EDEN_NX2_GPL_OPTIMIZE_THREADS");
         const size_t count =
-            value != nullptr && *value != 0 ? std::strtoul(value, nullptr, 10) : size_t{1};
+            value != nullptr && *value != 0 ? std::strtoul(value, nullptr, 10) : size_t{2};
         LOG_INFO(Render_Vulkan, "Nx2Perf gpl: optimized links on {}", count == 0
                                     ? std::string{"the shader job scheduler (Background)"}
                                     : fmt::format("{} low-priority thread(s)", count));

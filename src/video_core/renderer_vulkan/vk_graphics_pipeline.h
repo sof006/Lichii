@@ -311,12 +311,23 @@ public:
                !optimized_build->IsBuilt();
     }
 
-    /// Moves the pending optimized build ahead of the background builds, once.
+    /// Moves the pending optimized build ahead of the background builds, once. An optimized link
+    /// queued on its own pool is also offered to the shader job scheduler.
     void HurryOptimized() {
         if (!optimized_hurried && optimized_build) {
             optimized_hurried = true;
-            optimized_build->Promote(VideoCommon::ShaderJobPriority::Soon);
+            optimized_build->Hurry(build_jobs, VideoCommon::ShaderJobPriority::Soon);
         }
+    }
+
+    /// How long its draws have been skipped while it draws unoptimized, from the first skip
+    /// (GPU thread).
+    std::chrono::steady_clock::duration UnoptimizedSkippedFor(
+        std::chrono::steady_clock::time_point now) {
+        if (first_unoptimized_skip == std::chrono::steady_clock::time_point{}) {
+            first_unoptimized_skip = now;
+        }
+        return now - first_unoptimized_skip;
     }
 
     /// Builds it on this thread, for a pipeline made with PipelineBuildQueue::owner_builds
@@ -540,6 +551,7 @@ private:
     std::atomic_bool optimized_ready{};
     bool optimized_bound{};
     bool optimized_hurried{}; ///< GPU thread (HurryOptimized)
+    std::chrono::steady_clock::time_point first_unoptimized_skip{}; ///< GPU thread
     /// The build produced a pipeline. Written by the build before it completes, read by the GPU
     /// thread after IsBuilt(), unlike `pipeline`, which the scheduler thread may swap.
     bool has_pipeline{};

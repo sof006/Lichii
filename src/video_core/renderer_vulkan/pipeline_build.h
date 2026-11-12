@@ -271,6 +271,22 @@ public:
         return IsBuilt() && state->failed;
     }
 
+    /// Promote(), and for a build on a pool of its own, a driver job of `hurry_jobs` at `priority`
+    /// as well: whichever thread gets to it first builds it, once.
+    void Hurry(VideoCommon::ShaderJobScheduler* hurry_jobs,
+               VideoCommon::ShaderJobPriority priority) const {
+        if (jobs) {
+            Promote(priority);
+            return;
+        }
+        if (hurry_jobs == nullptr || state->claimed.load(std::memory_order_relaxed)) {
+            return;
+        }
+        VideoCommon::ShaderJob job{.priority = priority};
+        job.driver = [state = state] { state->Run(); };
+        hurry_jobs->Submit(std::move(job));
+    }
+
     /// Builds it on this thread (owner_builds)
     void Build() const {
         state->Run();
