@@ -2767,10 +2767,10 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) {
 
 /// On AMD's Windows driver a pipeline drawn with its unoptimized first build (fast first build, or
 /// a fast link) draws white outlines around alpha blended effects (smoke, particles, glows) until
-/// the optimized build is in. With asynchronous shaders on, a blended draw with such a pipeline is
-/// skipped as a draw whose pipeline is still building would be (when that draw may be skipped),
-/// and its optimized build moves ahead of the background builds. Opaque draws keep the unoptimized
-/// build. EDEN_NX2_UNOPTIMIZED_BLENDS=1 draws blended effects with it anyway.
+/// the optimized build is in. With asynchronous shaders on, a blended draw, or one that writes no
+/// depth, with such a pipeline is skipped (when that draw may be skipped), and its optimized build
+/// moves ahead of the background builds. Draws writing depth keep the unoptimized build.
+/// EDEN_NX2_UNOPTIMIZED_BLENDS=1 draws effects with it anyway.
 bool PipelineCache::SkipUnoptimizedBlend(GraphicsPipeline* pipeline) {
     static const bool draw_anyway = [] {
         const char* value = std::getenv("EDEN_NX2_UNOPTIMIZED_BLENDS");
@@ -2790,7 +2790,11 @@ bool PipelineCache::SkipUnoptimizedBlend(GraphicsPipeline* pipeline) {
             break;
         }
     }
-    if (!blends) {
+    // Effects drawn without blending (heat haze, water ripples) don't write depth either: only
+    // draws that write depth (the scene's geometry) keep the unoptimized build.
+    const bool writes_depth =
+        regs.zeta_enable != 0 && regs.depth_test_enable != 0 && regs.depth_write_enabled != 0;
+    if (!blends && writes_depth) {
         return false;
     }
     // Unlike a draw whose pipeline is still building (BuiltPipeline), small draws without depth are
@@ -2811,7 +2815,7 @@ bool PipelineCache::SkipUnoptimizedBlend(GraphicsPipeline* pipeline) {
     static std::atomic<u64> skipped{};
     if ((skipped.fetch_add(1, std::memory_order_relaxed) & 255) == 0) {
         LOG_INFO(Render_Vulkan,
-                 "Nx2Perf unoptimized_blend: {} blended draws skipped until their optimized "
+                 "Nx2Perf unoptimized_blend: {} effect draws skipped until their optimized "
                  "pipeline is in",
                  skipped.load(std::memory_order_relaxed));
     }

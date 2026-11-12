@@ -301,6 +301,7 @@ static void RemoveTitlebarFilter() {
 #endif
 #ifdef _WIN32
 #include <QProcess>
+#include "yuzu/amd_driver_cache.h"
 #include "yuzu/debug_report.h"
 #endif
 
@@ -387,6 +388,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     QtCommon::Init(this);
 #ifdef _WIN32
     DebugReport::StartLogFlush();
+    AmdDriverCache::LogResult();
 #endif
 
     Common::FS::CreateEdenPaths();

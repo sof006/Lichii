@@ -474,6 +474,9 @@ std::string ShaderCacheText() {
     };
     const fs::path shader_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::ShaderDir);
     describe(shader_dir, "Shader folder");
+    if (const fs::path driver_dir = Common::FS::GetDriverShaderCacheDir(); !driver_dir.empty()) {
+        describe(driver_dir / "AMD" / "VkCache", "AMD driver cache files");
+    }
     const fs::path home_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir) / "cache" / "shader";
     std::error_code ec;
     if (!fs::equivalent(home_dir, shader_dir, ec)) {
@@ -524,6 +527,7 @@ std::string Summary(const std::string& log) {
     double async_ms = 0, compute_driver_ms = 0;
     double unoptimized_blend = 0;
     std::vector<std::string_view> header, precache, crashes, errors;
+    std::string_view cached_first;
     u64 error_count = 0, critical_count = 0, warning_count = 0;
     double last_time = 0;
 
@@ -562,7 +566,9 @@ std::string Summary(const std::string& log) {
         } else if (line.find(" <Warning> ") != line.npos) {
             ++warning_count;
         }
-        if (line.find("Shader precache") != line.npos || line.find("ShaderWarm") != line.npos) {
+        if (line.find("Shader precache") != line.npos || line.find("ShaderWarm") != line.npos ||
+            line.find("AMD driver cache") != line.npos ||
+            line.find("AMD driver shader cache folder") != line.npos) {
             if (precache.size() < 60) {
                 precache.push_back(line);
             }
@@ -610,6 +616,8 @@ std::string Summary(const std::string& log) {
             ++fast_first;
         } else if (line.find("Nx2Perf unoptimized_blend:") != line.npos) {
             unoptimized_blend = NumberAfter(line, "unoptimized_blend: ").value_or(0);
+        } else if (line.find("Nx2Perf cached_first:") != line.npos) {
+            cached_first = line.substr(line.find("cached_first:"));
         }
     }
 
@@ -664,8 +672,10 @@ std::string Summary(const std::string& log) {
     text += fmt::format("Built on the GPU thread: {} graphics, {} compute\n", gfx_builds,
                         compute_builds);
     text += fmt::format("Graphics builds logged: {}, {:.0f} ms in total; fast first builds: {}; "
-                        "blended draws skipped until optimized: {:.0f}\n",
+                        "effect draws skipped until optimized: {:.0f}\n",
                         async_builds, async_ms, fast_first, unoptimized_blend);
+    text += fmt::format("Optimized pipelines from the driver's cache (last count): {}\n",
+                        cached_first.empty() ? std::string_view{"none asked"} : cached_first);
     text += fmt::format("Compute builds logged: {}, {:.0f} ms in total\n", compute_driver_builds,
                         compute_driver_ms);
     text += fmt::format("Compute dispatches that waited for their pipeline: {} ({} of 100 ms or "

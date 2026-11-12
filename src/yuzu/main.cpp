@@ -31,6 +31,7 @@
 
 #ifdef _WIN32
 #include <QScreen>
+#include "amd_driver_cache.h"
 #include "debug_report.h"
 
 static void OverrideWindowsFont() {
@@ -87,6 +88,9 @@ int main(int argc, char* argv[]) {
 #ifdef _WIN32
     if (DebugReport::RunCrashReportProcess(argc, argv)) {
         return 0;
+    }
+    if (int exit_code = 0; AmdDriverCache::RunProbeProcess(&exit_code)) {
+        return exit_code;
     }
 #endif
     LoadNx2Switches(argv[0]);
@@ -220,6 +224,11 @@ int main(int argc, char* argv[]) {
 
     // Before anything opens the shader caches.
     ShaderCacheMove::OfferMove(nullptr);
+#ifdef _WIN32
+    if (!is_child) {
+        AmdDriverCache::AdoptPreviousCopy();
+    }
+#endif
 
     MainWindow main_window{has_broken_vulkan};
     // After settings have been loaded by GMainWindow, apply the filter
