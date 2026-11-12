@@ -67,6 +67,10 @@ EDEN_NX2_FENCE_BATCH=1
 # glows) whose pipeline has only its quick unoptimized build is skipped until the optimized build
 # is in, because the quick build draws white outlines around it there. =1 draws it anyway.
 #EDEN_NX2_UNOPTIMIZED_BLENDS=1
+# AMD's Windows driver: before a quick unoptimized build or link, the optimized pipeline is taken
+# from the driver's shader cache when the precache or an earlier session built it (no rebuild,
+# no freeze). =0 always makes the quick build first.
+#EDEN_NX2_CACHED_FIRST=0
 # Windows: debug reports in lichii-reports next to lichii.exe (on exit after a game, after a
 # crash, and Help > Save Debug Report), with hitches over 100 ms and shader builds logged.
 # =0 turns them off, and the extra logging with them.

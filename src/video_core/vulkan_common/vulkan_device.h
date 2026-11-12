@@ -50,6 +50,8 @@ VK_DEFINE_HANDLE(VmaPool)
     FEATURE(EXT, ShaderDemoteToHelperInvocation, SHADER_DEMOTE_TO_HELPER_INVOCATION,               \
             shader_demote_to_helper_invocation)                                                    \
     FEATURE(EXT, SubgroupSizeControl, SUBGROUP_SIZE_CONTROL, subgroup_size_control)                \
+    FEATURE(EXT, PipelineCreationCacheControl, PIPELINE_CREATION_CACHE_CONTROL,                    \
+            pipeline_creation_cache_control)                                                       \
     FEATURE(KHR, Maintenance4, MAINTENANCE_4, maintenance4)                                        \
     FEATURE(KHR, Synchronization2, SYNCHRONIZATION_2, synchronization2)
 
@@ -1203,6 +1205,12 @@ FN_MAX_LIMIT_LIST
     /// Returns true if the device supports VK_KHR_maintenance4.
     bool IsKhrMaintenance4Supported() const {
         return extensions.maintenance4;
+    }
+
+    /// Returns true if pipelines can be created with
+    /// VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT (pipelineCreationCacheControl).
+    bool IsPipelineCreationCacheControlSupported() const {
+        return extensions.pipeline_creation_cache_control;
     }
 
     /// Returns true if VK_KHR_pipeline_binary is enabled: only shader cache v2 enables it, on

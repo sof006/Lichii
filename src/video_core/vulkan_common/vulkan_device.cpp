@@ -1962,6 +1962,13 @@ void Device::RemoveUnsuitableExtensions() {
     RemoveExtensionFeatureIfUnsuitable(extensions.maintenance4, features.maintenance4,
                                        VK_KHR_MAINTENANCE_4_EXTENSION_NAME);
 
+    // VK_EXT_pipeline_creation_cache_control
+    extensions.pipeline_creation_cache_control =
+        features.pipeline_creation_cache_control.pipelineCreationCacheControl;
+    RemoveExtensionFeatureIfUnsuitable(extensions.pipeline_creation_cache_control,
+                                       features.pipeline_creation_cache_control,
+                                       VK_EXT_PIPELINE_CREATION_CACHE_CONTROL_EXTENSION_NAME);
+
     // VK_KHR_maintenance5
     extensions.maintenance5 = features.maintenance5.maintenance5;
     RemoveExtensionFeatureIfUnsuitable(extensions.maintenance5, features.maintenance5,

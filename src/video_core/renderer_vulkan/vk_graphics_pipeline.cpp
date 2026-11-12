@@ -699,7 +699,7 @@ GraphicsPipeline::GraphicsPipeline(
                     library_cache->RecordFallback();
                     FallBackToMonolithic(render_pass);
                 }
-                if (made && !libraries_only && build_jobs &&
+                if (made && !libraries_only && build_jobs && !linked_optimized &&
                     ((GplOptimizeEnabled() && device.CanFastLinkGraphicsLibraries()) ||
                      device.FastLinkUntilOptimized())) {
                     // Optimized link on its own low-priority pool, swapped in at a later draw
@@ -725,6 +725,20 @@ GraphicsPipeline::GraphicsPipeline(
                 for (vk::ShaderModule& module : spv_modules) {
                     module.reset();
                 }
+            } else if (FastFirstBuildEnabled(device.GetDriverID() ==
+                                             VK_DRIVER_ID_AMD_PROPRIETARY) &&
+                       worker_only_build && build_jobs && !mesh_emulation &&
+                       !(binaries && binaries->HasStoredGraphics(GraphicsRecordKey(key))) &&
+                       CachedOptimizedFirstEnabled() &&
+                       device.IsPipelineCreationCacheControlSupported() &&
+                       [&] {
+                           // Built optimized by the precache or an earlier session: the driver
+                           // has it, and it is used as built.
+                           pipeline = MakePipeline(render_pass, false, true);
+                           ReportCachedFirst("graphics", static_cast<bool>(pipeline));
+                           return static_cast<bool>(pipeline);
+                       }()) {
+                // No fast first build and no optimized build to follow.
             } else if (FastFirstBuildEnabled(device.GetDriverID() ==
                                              VK_DRIVER_ID_AMD_PROPRIETARY) &&
                        worker_only_build && build_jobs && !mesh_emulation &&
@@ -2187,7 +2201,8 @@ void GraphicsPipeline::FillStates(PipelineStates& s) const {
 
 /// Builds the monolithic pipeline from every stage module, unoptimized when `fast` is set. Null
 /// for a mesh pipeline on a device without mesh shaders.
-vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass, bool fast) {
+vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass, bool fast,
+                                            bool cached_only) {
     if (IsMeshPipeline() && !device.IsExtMeshShaderSupported() && !mesh_emulation) {
         return {};
     }
@@ -2313,6 +2328,9 @@ vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass, bool fast)
     if (fast) {
         flags |= VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT;
     }
+    if (cached_only) {
+        flags |= VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT;
+    }
 
     const bool unoptimized = (flags & VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT) != 0;
     const auto trace_begin = std::chrono::steady_clock::now();
@@ -2345,7 +2363,8 @@ vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass, bool fast)
     // A fast first build's unoptimized pipeline stays out of the pipeline binaries: the
     // optimized build that follows is the one kept under the key.
     vk::Pipeline created =
-        binaries && !fast
+        cached_only ? device.GetLogical().TryCreateGraphicsPipeline(pipeline_ci, *pipeline_cache)
+        : binaries && !fast
             ? binaries->CreateGraphicsPipeline(pipeline_ci, *pipeline_cache, GraphicsRecordKey(key))
             : device.GetLogical().CreateGraphicsPipeline(pipeline_ci, *pipeline_cache);
     TracePipelineBuild("END", "graphics", key.Hash(), key.unique_hashes, unoptimized,
@@ -2572,7 +2591,8 @@ GplLibrary GraphicsPipeline::MakeShaderLibrary(GplPart part, const PipelineState
 
 /// Links the vertex input, both shader libraries and the fragment output library into a pipeline,
 /// with link time optimization when `optimized` is set.
-vk::Pipeline GraphicsPipeline::LinkLibraries(VkRenderPass render_pass, bool optimized) {
+vk::Pipeline GraphicsPipeline::LinkLibraries(VkRenderPass render_pass, bool optimized,
+                                             bool cached_only) {
     const std::array<VkPipeline, 4> libraries{
         *vertex_input_library,
         *shader_libraries[0]->pipeline,
@@ -2592,8 +2612,11 @@ vk::Pipeline GraphicsPipeline::LinkLibraries(VkRenderPass render_pass, bool opti
     if (optimized) {
         flags |= VK_PIPELINE_CREATE_LINK_TIME_OPTIMIZATION_BIT_EXT;
     }
+    if (cached_only) {
+        flags |= VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT;
+    }
     const auto begin = std::chrono::steady_clock::now();
-    vk::Pipeline linked_pipeline = device.GetLogical().CreateGraphicsPipeline({
+    const VkGraphicsPipelineCreateInfo link_pipeline_ci{
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .pNext = &link_ci,
         .flags = flags,
@@ -2613,7 +2636,13 @@ vk::Pipeline GraphicsPipeline::LinkLibraries(VkRenderPass render_pass, bool opti
         .subpass = 0,
         .basePipelineHandle = nullptr,
         .basePipelineIndex = 0,
-    }, *pipeline_cache);
+    };
+    if (cached_only) {
+        // Not counted as a link: only asks whether the driver has it.
+        return device.GetLogical().TryCreateGraphicsPipeline(link_pipeline_ci, *pipeline_cache);
+    }
+    vk::Pipeline linked_pipeline =
+        device.GetLogical().CreateGraphicsPipeline(link_pipeline_ci, *pipeline_cache);
     library_cache->RecordLink(optimized, std::chrono::steady_clock::now() - begin);
     return linked_pipeline;
 }
@@ -2705,7 +2734,19 @@ bool GraphicsPipeline::MakeLibraryPipeline(VkRenderPass render_pass) {
     // is in (FastLinkUntilOptimized); on the loading screen it is linked optimized.
     const bool fast_link = device.CanFastLinkGraphicsLibraries() ||
                            (build_jobs != nullptr && device.FastLinkUntilOptimized());
-    pipeline = LinkLibraries(render_pass, !fast_link);
+    if (fast_link && !device.CanFastLinkGraphicsLibraries() && CachedOptimizedFirstEnabled() &&
+        device.IsPipelineCreationCacheControlSupported()) {
+        // Built optimized by the precache or an earlier session: the driver has it.
+        vk::Pipeline cached = LinkLibraries(render_pass, true, true);
+        linked_optimized = static_cast<bool>(cached);
+        ReportCachedFirst("graphics link", linked_optimized);
+        if (linked_optimized) {
+            pipeline = std::move(cached);
+        }
+    }
+    if (!linked_optimized) {
+        pipeline = LinkLibraries(render_pass, !fast_link);
+    }
     linked = true;
     return true;
 }

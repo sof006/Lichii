@@ -430,7 +430,8 @@ private:
     /// The fixed-function state of the pipeline (shared by the monolithic and library builds).
     void FillStates(PipelineStates& states) const;
 
-    vk::Pipeline MakePipeline(VkRenderPass render_pass, bool fast);
+    /// cached_only: only if the driver has it already (else empty), see CachedOptimizedFirstEnabled.
+    vk::Pipeline MakePipeline(VkRenderPass render_pass, bool fast, bool cached_only = false);
 
     /// Library build (EDEN_NX2_GPL): gets or builds the two shader libraries, then (unless
     /// libraries_only) links them with this pipeline's vertex input and fragment output parts.
@@ -443,7 +444,7 @@ private:
     std::string ShaderLibraryKey(GplPart part, const PipelineStates& states,
                                  VkRenderPass render_pass) const;
 
-    vk::Pipeline LinkLibraries(VkRenderPass render_pass, bool optimized);
+    vk::Pipeline LinkLibraries(VkRenderPass render_pass, bool optimized, bool cached_only = false);
 
     /// The library route failed: per-stage sets kept, with a layout a monolithic pipeline takes.
     void FallBackToMonolithic(VkRenderPass render_pass);
@@ -524,6 +525,8 @@ private:
     vk::Pipeline fragment_output_library;
     vk::DescriptorSetLayout fallback_empty_set_layout;
     bool linked{};
+    /// Linked optimized from the driver's cache: no optimized link to follow
+    bool linked_optimized{};
 
     vk::DescriptorSetLayout descriptor_set_layout;
     DescriptorAllocator descriptor_allocator;

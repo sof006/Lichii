@@ -204,7 +204,7 @@ void ComputePipeline::TickUpscalerTrace() {
     }
 }
 
-vk::Pipeline ComputePipeline::MakeComputePipeline(bool fast) {
+vk::Pipeline ComputePipeline::MakeComputePipeline(bool fast, bool cached_only) {
     const VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT subgroup_size_ci{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT,
         .pNext = nullptr,
@@ -225,6 +225,9 @@ vk::Pipeline ComputePipeline::MakeComputePipeline(bool fast) {
     }
     if (fast || BuildsUnoptimized(device.GetDriverID(), shader_hash)) {
         flags |= VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT;
+    }
+    if (cached_only) {
+        flags |= VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT;
     }
     const VkComputePipelineCreateInfo compute_ci{
         .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
@@ -256,7 +259,8 @@ vk::Pipeline ComputePipeline::MakeComputePipeline(bool fast) {
     // A fast first build's unoptimized pipeline stays out of the pipeline binaries: the
     // optimized build that follows is the one kept under the key.
     vk::Pipeline result =
-        binaries && !fast
+        cached_only ? device.GetLogical().TryCreateComputePipeline(compute_ci, *pipeline_cache)
+        : binaries && !fast
             ? binaries->CreateComputePipeline(compute_ci, *pipeline_cache, binary_key)
             : device.GetLogical().CreateComputePipeline(compute_ci, *pipeline_cache);
     TracePipelineBuild("END", "compute", shader_hash, traced, unoptimized,
@@ -340,9 +344,19 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
 
     auto func{[this, shader_notify, pipeline_statistics] {
         try {
-            if (FastFirstBuildEnabled(device.GetDriverID() == VK_DRIVER_ID_AMD_PROPRIETARY) &&
+            const bool fast_first =
+                FastFirstBuildEnabled(device.GetDriverID() == VK_DRIVER_ID_AMD_PROPRIETARY) &&
                 jobs && !BuildsUnoptimized(device.GetDriverID(), shader_hash) &&
-                !(binaries && binaries->HasStoredCompute(binary_key))) {
+                !(binaries && binaries->HasStoredCompute(binary_key));
+            if (fast_first && CachedOptimizedFirstEnabled() &&
+                device.IsPipelineCreationCacheControlSupported()) {
+                // The precache (or an earlier session) built it optimized: the driver has it.
+                pipeline = MakeComputePipeline(false, true);
+                ReportCachedFirst("compute", static_cast<bool>(pipeline));
+            }
+            if (pipeline) {
+                // Used as built: no fast first build.
+            } else if (fast_first) {
                 // Dispatch with the unoptimized pipeline as soon as the driver returns it; the
                 // optimized one follows as a Background job and takes its place at a later
                 // dispatch (Configure). The module stays until then. A job still queued when the

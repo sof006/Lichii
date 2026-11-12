@@ -117,7 +117,8 @@ private:
     /// Builds the pipeline once, on whichever thread gets here first.
     void RunBuild();
     /// The driver object for this shader; `fast` asks for an unoptimized build.
-    vk::Pipeline MakeComputePipeline(bool fast);
+    /// cached_only: only if the driver has it already (else empty), see CachedOptimizedFirstEnabled.
+    vk::Pipeline MakeComputePipeline(bool fast, bool cached_only = false);
 
     const Device& device;
     vk::PipelineCache& pipeline_cache;

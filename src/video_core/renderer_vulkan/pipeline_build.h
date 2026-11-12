@@ -35,6 +35,35 @@ inline bool FastFirstBuildEnabled(bool default_on = false) {
     return override_mode >= 0 ? (override_mode == 1) : default_on;
 }
 
+/// Before a fast first build or a fast link, the optimized pipeline is asked of the driver with
+/// VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT, and used if the driver already has it.
+/// AMD's Windows driver answers from its disk cache in under 0.1 ms. Its unoptimized builds have
+/// cache entries of their own, which the precache never fills: without this, a compute shader the
+/// precache built still had its unoptimized build made in play (up to 2.7 s in a title's logs).
+/// EDEN_NX2_CACHED_FIRST=0 turns it off.
+inline bool CachedOptimizedFirstEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_CACHED_FIRST");
+        return value == nullptr || *value != '0';
+    }();
+    return enabled;
+}
+
+/// Counts what CachedOptimizedFirstEnabled found ("compute", "graphics link", "graphics"), logged
+/// at the first and then every 64th ask.
+inline void ReportCachedFirst(const char* kind, bool cached) {
+    static std::atomic<u64> asks{};
+    static std::atomic<u64> hits{};
+    const u64 hit_count = hits.fetch_add(cached ? 1 : 0, std::memory_order_relaxed) + (cached ? 1 : 0);
+    const u64 ask_count = asks.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (ask_count == 1 || ask_count % 64 == 0) {
+        LOG_INFO(Render_Vulkan,
+                 "Nx2Perf cached_first: {} of {} optimized pipelines were in the driver's cache "
+                 "(this one: {}, {})",
+                 hit_count, ask_count, kind, cached ? "cached" : "not cached");
+    }
+}
+
 /// EDEN_NX2_HEAVY_SKIP: a native pipeline of at least this many converted instructions (all
 /// stages) has its draws skipped while the driver builds it, instead of holding every draw
 /// behind it. "1" picks 4000; 0 or unset turns it off. In a demanding Switch 2 test title's first

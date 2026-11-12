@@ -2793,7 +2793,9 @@ bool PipelineCache::SkipUnoptimizedBlend(GraphicsPipeline* pipeline) {
     if (!blends) {
         return false;
     }
-    // The same rule as for a draw whose pipeline is still building (BuiltPipeline).
+    // Unlike a draw whose pipeline is still building (BuiltPipeline), small draws without depth are
+    // skipped too: smoke and dust are 6-index quads, which that rule keeps. A native draw is
+    // skipped only where native draws may be.
     const bool native = maxwell3d->GetNativeMacroEngine().native_turing;
     static const bool discard_native = [] {
         const char* value = std::getenv("EDEN_NX2_ASYNC_DISCARD");
@@ -2802,9 +2804,7 @@ bool PipelineCache::SkipUnoptimizedBlend(GraphicsPipeline* pipeline) {
     const bool native_may_skip =
         discard_native ||
         Settings::values.native_async_draws.GetValue() != Settings::NativeAsyncDraws::Wait;
-    const auto& draw_state = maxwell3d->draw_manager.draw_state;
-    if (!CanDiscardPendingDraw(native, regs.zeta_enable != 0, draw_state.draw_element_count,
-                               draw_state.draw_element_count, native && native_may_skip)) {
+    if (native && !native_may_skip) {
         return false;
     }
     pipeline->HurryOptimized();
