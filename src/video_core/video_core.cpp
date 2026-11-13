@@ -11,15 +11,19 @@
 #include "core/core.h"
 #include "core/frontend/emu_window.h"
 #include "core/frontend/graphics_context.h"
+#include "core/gpu_dirty_memory_manager.h"
 #include "video_core/buffer_cache/uniform_stream_reuse.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/host1x/host1x.h"
+#include "video_core/nx2_backx.h"
 #include "video_core/nx2_cmdpage_diag.h"
 #include "video_core/nx2_download_trace.h"
 #include "video_core/nx2_drain_check.h"
 #include "video_core/nx2_entry_check.h"
+#include "video_core/nx2_list_grid.h"
 #include "video_core/nx2_list_indirect.h"
 #include "video_core/nx2_list_indirect_stats.h"
+#include "video_core/nx2_list_macro_trace.h"
 #include "video_core/nx2_list_stats.h"
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
@@ -64,11 +68,15 @@ void CreateGPU(std::optional<Tegra::GPU>& gpu, Core::Frontend::EmuWindow& emu_wi
     VideoCommon::StutterTrace::StartSession();
     Tegra::Nx2CmdPageDiag::ReadSwitch();
     VideoCommon::Nx2DownloadTrace::ReadSwitch();
+    VideoCommon::ListMacroTrace::ReadSwitch();
+    Tegra::Nx2ListGrid::ReadSwitch();
     VideoCommon::Nx2DrainCheck::ReadSwitch();
     VideoCommon::ReadTrace::ReadSwitch();
     Tegra::Nx2ListStats::ReadSwitches();
     VideoCommon::Nx2AcquireStats::ReadSwitch();
     VideoCommon::Nx2Perf::ReadSwitch();
+    VideoCommon::BackX::ReadSwitch();
+    Core::GPUDirtyMemoryManager::count_collects = VideoCommon::BackX::g_verify;
     Tegra::Nx2EntryCheck::ReadSwitch();
     Tegra::Nx2ListIndirect::ReadSwitch();
     Tegra::Nx2ListIndirect::Stats::ReadSwitch();

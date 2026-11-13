@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// SPDX-FileCopyrightText: 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
@@ -14,6 +13,7 @@
 #include "video_core/control/scheduler.h"
 #include "video_core/gpu.h"
 #include "video_core/gpu_split.h"
+#include "video_core/nx2_back_idle_trace.h"
 #include "video_core/nx2_profile.h"
 
 namespace Tegra::Control {
@@ -88,6 +88,8 @@ bool Scheduler::ResumePending(GPU& gpu) {
             if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
                 split.PublishSoon();
             }
+            VideoCommon::BackIdleTrace::SetFrontState(
+                VideoCommon::BackIdleTrace::FrontState::Parse);
             BindChannel(gpu, state->bind_id);
             dma_pusher.DispatchCalls();
             progress = true;
@@ -99,6 +101,12 @@ bool Scheduler::ResumePending(GPU& gpu) {
     });
     any_pending.store(!pending_channels.empty(), std::memory_order_release);
     return any_progress;
+}
+
+bool Scheduler::WaitsForListCopy() const {
+    return std::ranges::any_of(pending_channels, [](const auto& state) {
+        return state->payload->dma_pusher.WaitsForListCopy();
+    });
 }
 
 void Scheduler::DeclareChannel(std::shared_ptr<ChannelState> new_channel) {

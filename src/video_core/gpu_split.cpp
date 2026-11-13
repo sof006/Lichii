@@ -3,7 +3,9 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <optional>
 #include <thread>
+#include <utility>
 
 #ifdef _MSC_VER
 #include <intrin.h>
@@ -20,6 +22,9 @@
 #include <unistd.h>
 #define NX2_SPLIT_OWNER_CHECK_LINUX
 #endif
+#ifdef __GLIBC__
+#include <execinfo.h>
+#endif
 #include <cstring>
 #include <string>
 #include <string_view>
@@ -35,6 +40,7 @@
 #include "video_core/gpu_wait_stats.h"
 #include "video_core/memory_manager.h"
 #include "video_core/nx2.h"
+#include "video_core/nx2_back_idle_trace.h"
 #include "video_core/nx2_fast_draw.h"
 #include "video_core/nx2_profile.h"
 
@@ -77,6 +83,13 @@ void Pause() {
         return "KeplerMemory";
     }
     return "an engine";
+}
+
+BackIdleTrace::FrontState WaitState(DrainSite site) {
+    return site == DrainSite::ListWriters || site == DrainSite::ListSync ||
+                   site == DrainSite::ListFlush
+               ? BackIdleTrace::FrontState::Writers
+               : BackIdleTrace::FrontState::Drain;
 }
 
 } // Anonymous namespace
@@ -143,7 +156,27 @@ void GpuSplit::CheckOwner(const char* where) {
     LOG_ERROR(HW_GPU, "GPU split owner check: {} on thread {} while the back runs; stack:{}",
               where, thread, stack);
 #else
-    (void)where;
+    // Also while the back is idle: its idle hook submits (Scheduler::FlushDeferred).
+    if (on_back_thread || !instance.back_running.load(std::memory_order_acquire)) {
+        return;
+    }
+    static std::atomic<u32> reports{};
+    if (reports.fetch_add(1) >= 12) {
+        return;
+    }
+    std::string stack;
+#ifdef __GLIBC__
+    void* frames[40];
+    const int count = backtrace(frames, 40);
+    if (char** const symbols = backtrace_symbols(frames, count)) {
+        for (int i = 1; i < count; ++i) {
+            stack += fmt::format("\n  {}", symbols[i]);
+        }
+        std::free(symbols);
+    }
+#endif
+    LOG_ERROR(HW_GPU, "GPU split owner check: {} on a thread other than the back; stack:{}", where,
+              stack);
 #endif
 }
 
@@ -272,6 +305,11 @@ void GpuSplit::Stop() {
     consumed_cache = 0;
     publish_every = PublishEvery;
     front_engine = nullptr;
+    state_engine = nullptr;
+    state_count = 0;
+    state_breaks = false;
+    state_anywhere = false;
+    state_flags.fill(0);
     back_engine = nullptr;
     front_macros = false;
     published.store(0, std::memory_order_relaxed);
@@ -340,6 +378,7 @@ void GpuSplit::NoteLatePublish() {
 }
 
 void GpuSplit::Publish() {
+    FlushState();
     if (published_local == write_position) {
         return;
     }
@@ -356,12 +395,14 @@ void GpuSplit::Publish() {
 }
 
 void GpuSplit::Drain(DrainSite site) {
+    FlushState();
     consumed_cache = consumed.load(std::memory_order_acquire);
     if (consumed_cache == write_position) {
         return;
     }
     Publish();
     Nx2Profile::Scope scope{Nx2Profile::Zone::SplitDrain};
+    const BackIdleTrace::FrontWait idle_trace{WaitState(site)};
     const u64 start = Nx2Profile::Enabled() ? Nx2Profile::Ticks() : 0;
     for (u32 spins = 0;; ++spins) {
         consumed_cache = consumed.load(std::memory_order_acquire);
@@ -412,8 +453,8 @@ void GpuSplit::NoteSemaphoreWrite(u64 device_address, u32 payload, bool known, b
     }
     if (semaphore_writes.size() >= semaphore_writes_limit) {
         // The words of releases in memory hold their values.
-        std::erase_if(semaphore_writes,
-                      [this](const auto& entry) { return InMemory(entry.second); });
+        boost::unordered::erase_if(
+            semaphore_writes, [this](const auto& entry) { return InMemory(entry.second); });
         semaphore_writes_limit = std::max<size_t>(1024, semaphore_writes.size() * 2);
     }
     // The release is in the last entry sent, or one before (a QMD signal valued late).
@@ -576,16 +617,19 @@ u64 GpuSplit::DeviceWritesTarget(DAddr address, u64 size) const {
 }
 
 bool GpuSplit::WaitForWrites(const Tegra::MemoryManager& memory, GPUVAddr address, u64 size) {
+    FlushState(); // A block that may issue a deferred draw notes its write anywhere.
     return WaitFor(std::min(WritesTarget(memory, address, size), write_position),
                    DrainSite::MacroDmaWrites);
 }
 
 bool GpuSplit::WaitFor(u64 target, DrainSite site) {
+    FlushState();
     consumed_cache = consumed.load(std::memory_order_acquire);
     if (consumed_cache >= target) {
         return false;
     }
     Nx2Profile::Scope scope{Nx2Profile::Zone::WriterWait};
+    const BackIdleTrace::FrontWait idle_trace{WaitState(site)};
     wait_target.store(target, std::memory_order_seq_cst);
     Publish();
     const u64 start = Nx2Profile::Enabled() ? Nx2Profile::Ticks() : 0;
@@ -619,6 +663,25 @@ void GpuSplit::Backoff(u32 spins, u64 target) {
         front_wake.wait(seen, std::memory_order_seq_cst);
     }
     front_waiting.store(false, std::memory_order_relaxed);
+}
+
+void GpuSplit::FlushStateSlow() {
+    // Cleared first: the entry's own SelectEngine, Reserve and Commit flush again.
+    const u32 count = std::exchange(state_count, 0);
+    SelectEngine(state_engine);
+    const size_t size = 1 + StateFlagWords + count;
+    u64* const entry = Reserve(size);
+    entry[0] = static_cast<u64>(Kind::State) | (state_breaks ? HasBreak : 0) |
+               (u64{state_break & 0xffff} << 8) | (u64{count} << 32);
+    std::memcpy(entry + 1, state_flags.data(), sizeof(state_flags));
+    std::memcpy(entry + 1 + StateFlagWords, state_writes.data(), size_t{count} * sizeof(u64));
+    Commit(size);
+    if (state_anywhere) {
+        NoteCacheWrite();
+    }
+    state_breaks = false;
+    state_anywhere = false;
+    state_flags.fill(0);
 }
 
 void GpuSplit::SwitchEngine(Tegra::Engines::EngineInterface* engine) {
@@ -799,6 +862,15 @@ size_t GpuSplit::Execute(const u64* entry, size_t words) {
                                 amount, static_cast<u32>(entry[1]));
         return data + (amount + 1) / 2;
     }
+    case Kind::State: {
+        const u32 count = static_cast<u32>(head >> 32);
+        const u32 last_break = (head & HasBreak) != 0 ? static_cast<u32>((head >> 8) & 0xffff)
+                                                      : Tegra::Engines::Maxwell3D::NoBreak;
+        static_cast<Tegra::Engines::Maxwell3D*>(back_engine)
+            ->WriteStateRegisters(*system, std::span<const u64, StateFlagWords>{entry + 1, StateFlagWords},
+                                  std::span<const u64>{entry + 1 + StateFlagWords, count}, last_break);
+        return 1 + StateFlagWords + count;
+    }
     case Kind::Call: {
         if ((head & FastDrawNeutral) == 0) {
             Nx2FastDraw::Break(Nx2FastDraw::Reason::Call);
@@ -829,11 +901,16 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
     g_back_thread_id.store(static_cast<u32>(syscall(SYS_gettid)), std::memory_order_relaxed);
 #endif
     u64 read_position = 0;
+    const bool idle_trace = BackIdleTrace::Enabled();
+    u64 idle_since = 0;
     while (!stop_token.stop_requested()) {
         Nx2Profile::Report("GPU back thread", true);
         MaybeTick();
         u64 available = published.load(std::memory_order_acquire);
         if (available == read_position) {
+            if (idle_trace && idle_since == 0) {
+                idle_since = BackIdleTrace::Now();
+            }
             // The front publishes what it holds at its next commit (a few words) from now on.
             back_idle_at.store(read_position, std::memory_order_relaxed);
             Nx2Profile::Scope scope{Nx2Profile::Zone::SplitWait};
@@ -877,6 +954,10 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
                 back_waiting.store(false, std::memory_order_relaxed);
                 continue;
             }
+        }
+        if (idle_since != 0) {
+            BackIdleTrace::NoteBackIdle(idle_since, BackIdleTrace::Now());
+            idle_since = 0;
         }
         u64 last_store = read_position;
         while (read_position != available) {

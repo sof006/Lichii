@@ -44,6 +44,11 @@ constexpr size_t AttributeTypesOffset = 112;
 /// warm_defaults.cpp); used when the title has no pipeline cache.
 constexpr u64 DefaultAttributeTypes = 0x555555555555f555ULL;
 
+/// What the builder finds in the game files, recorded in the precache's count file. A file built by
+/// an older builder is built again at launch (WarmFilesStale). 2: Mario Kart World's .esetb
+/// effects. 3: .ptcl particle effects (Fire Emblem).
+constexpr u32 WarmBuilderVersion = 3;
+
 using GraphicsKey = std::array<u8, GraphicsKeySize>;
 using ComputeKey = std::array<u8, 24>;
 

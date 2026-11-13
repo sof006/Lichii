@@ -18,6 +18,7 @@
 #include <unordered_map>
 
 #include "common/common_types.h"
+#include "common/container/unordered_map.h"
 
 namespace Core {
 class System;
@@ -116,6 +117,12 @@ public:
     static void MarkGpuThread() {
         on_gpu_thread = true;
     }
+    /// Whether the calling thread is the GPU thread (see MarkGpuThread).
+    [[nodiscard]] static bool OnGpuThread() {
+        return on_gpu_thread;
+    }
+    /// Whether the calling thread owns the Vulkan scheduler: the back while it runs, else the
+    /// GPU thread. Other threads (CPU cores, services) must not record or submit work.
     [[nodiscard]] static bool OwnsScheduler() {
         return Get().BackRunning() ? on_back_thread : on_gpu_thread;
     }
@@ -227,6 +234,31 @@ public:
         NoteWrites(writes);
     }
 
+    /// A Maxwell3D state register write (not in execution_mask) from the front, shadow RAM
+    /// applied (not in replay) and changing the front's copy of the register. Writes in a row go
+    /// to the back as one entry once another entry follows or the front publishes or waits; the
+    /// back stores them and sets their dirty flags at once (Maxwell3D::WriteStateRegisters).
+    /// `flags`: the dirty flags the register sets; `breaks`: changing it ends fast draw reuse;
+    /// `anywhere`: the back may issue a deferred draw with it, which writes through the GPU caches
+    /// (noted as NoteCacheWrite once the block is sent, as FrontNoteWrites notes a pending draw).
+    /// Port of Damfortx's state blocks (76548f0bf1), after #717's StateDelta.
+    void StateWrite(Tegra::Engines::EngineInterface* engine, u32 method, u32 value,
+                    std::array<u8, 2> flags, bool breaks, bool anywhere) {
+        if (engine != state_engine || state_count == MaxStateWrites) {
+            FlushState();
+            state_engine = engine;
+        }
+        state_writes[state_count++] = u64{method} | (u64{value} << 32);
+        for (const u8 flag : flags) {
+            state_flags[flag / 64] |= u64{1} << (flag % 64);
+        }
+        if (breaks) {
+            state_break = method;
+            state_breaks = true;
+        }
+        state_anywhere = state_anywhere || anywhere;
+    }
+
     /// Defer flag: the call doesn't end fast draw reuse (nx2_fast_draw.h).
     static constexpr u64 FastDrawNeutral = 1 << 7;
 
@@ -318,6 +350,7 @@ public:
 
     /// Compute or copy work was just sent: what can write GPU-written command lists.
     void NoteWriter() {
+        FlushState();
         last_writer_position = write_position;
     }
     /// Waits until the back executed the compute and copy work sent so far (not what came after).
@@ -327,10 +360,15 @@ public:
     /// bit; semaphore acquires note it when a release still queued meets them): the guest's GPU
     /// work before it is complete before the commands after it are fetched.
     void NoteSync() {
+        FlushState();
         last_sync_position = write_position;
         synced_writer_position = last_writer_position;
     }
     /// The position after everything sent so far, for Ran and WaitForPosition.
+    [[nodiscard]] u64 Position() {
+        FlushState();
+        return write_position;
+    }
     [[nodiscard]] u64 Position() const {
         return write_position;
     }
@@ -484,10 +522,15 @@ private:
         Method, ///< Bits 8-23 method, 32-63 argument; flags IsLast, HasSegment (word 1)
         Multi,  ///< Bits 8-23 method, 32-63 amount; word 1 methods pending, [segment], words
         Call,   ///< Bits 8-31 payload size in words; word 1 thunk, then the payload
+        State,  ///< Bits 8-23 last method that breaks, 32-63 count; flag HasBreak; words 1-4
+                ///< dirty flags; then (method | value << 32) per write (StateWrite)
     };
     static constexpr u64 IsLast = 1 << 4;
     static constexpr u64 HasSegment = 1 << 5;
     static constexpr u64 Direct = 1 << 6; ///< Method: call it even if not executable (macros)
+    static constexpr u64 HasBreak = 1 << 4; ///< State: a write ends fast draw reuse
+    static constexpr size_t StateFlagWords = 4;
+    static constexpr u32 MaxStateWrites = 128;
 
     static constexpr size_t RingWords = size_t{1} << 20; // 8 MiB
     static constexpr size_t RingMask = RingWords - 1;
@@ -557,8 +600,17 @@ private:
                                  static_cast<size_t>(payload[function_words])});
     }
 
+    /// Sends the state writes gathered so far (before any other entry, publish or wait).
+    void FlushState() {
+        if (state_count != 0) {
+            FlushStateSlow();
+        }
+    }
+    void FlushStateSlow();
+
     /// Room for an entry of `words` at the write position (never across the ring's end).
     u64* Reserve(size_t words) {
+        FlushState();
         const size_t index = write_position & RingMask;
         if (index + words <= RingWords && write_position + words - consumed_cache <= RingWords)
             [[likely]] {
@@ -619,6 +671,7 @@ private:
     bool log_methods{};
     void LogMethod(const Tegra::Engines::EngineInterface* engine, u32 method);
     void SelectEngine(Tegra::Engines::EngineInterface* engine) {
+        FlushState();
         if (engine != front_engine) [[unlikely]] {
             SwitchEngine(engine);
         }
@@ -654,8 +707,10 @@ private:
     bool front_macros{};
     std::unique_ptr<u64[]> ring;
 
-    // Front side.
-    u64 write_position{};
+    // Front side, in its own 128-byte block (x86 prefetchers pull 64-byte lines in pairs): the
+    // back writes back_engine on every engine switch, and next to these fields that made the
+    // front miss the cache on almost every ring write (found by SerkiGohan).
+    alignas(128) u64 write_position{};
     u64 last_writer_position{};
     u64 last_sync_position{};
     u64 synced_writer_position{};
@@ -670,7 +725,7 @@ private:
         bool fenced;
     };
     /// The front's NoteSemaphoreWrite, by word address.
-    std::unordered_map<u64, SemaphoreWrite> semaphore_writes;
+    Common::unordered_map<u64, SemaphoreWrite> semaphore_writes;
     size_t semaphore_writes_limit = 1024; ///< Forget what the back ran past this many
     /// After the last entry that may write guest memory or the GPU caches anywhere (NoteAnyWrite,
     /// NoteUnplacedWrite, NoteCacheWrite), the last one that may write guest memory itself
@@ -696,9 +751,17 @@ private:
     /// PublishSoon), while the back may have nothing to do.
     size_t publish_every{PublishEvery};
     Tegra::Engines::EngineInterface* front_engine{};
+    /// The state writes being gathered (StateWrite).
+    Tegra::Engines::EngineInterface* state_engine{};
+    u32 state_count{};
+    u32 state_break{};
+    bool state_breaks{};
+    bool state_anywhere{};
+    std::array<u64, StateFlagWords> state_flags{};
+    std::array<u64, MaxStateWrites> state_writes{};
 
-    // Back side.
-    Tegra::Engines::EngineInterface* back_engine{};
+    // Back side, in its own block.
+    alignas(128) Tegra::Engines::EngineInterface* back_engine{};
     u64 back_entry_start{}; ///< Where the entry the back runs starts (BackEntry)
 
     /// An entry's position as fenced writes name it: with this start of the split in the high

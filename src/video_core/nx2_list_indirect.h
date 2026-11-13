@@ -20,10 +20,11 @@
 #include "video_core/macro_turing.h"
 
 // GPU-written command lists whose words the host GPU takes over (EDEN_NX2_LIST_INDIRECT, on
-// unless =0). Ocarina of Time's compute culling writes the group counts of a later dispatch as
-// the parameters of a macro call (compute method 0xe74): the split GPU thread's front had to
-// wait for that work to run on the host GPU and its copy to come back before it could parse
-// them (~145 ms of every second). The macros only move those words: 0xe74 stores them in the
+// unless =0, which leaves these lists to the list-fed grid macros of nx2_list_grid.h). Ocarina
+// of Time's compute culling writes the group counts of a later dispatch as the parameters of a
+// macro call (compute method 0xe74): the split GPU thread's front had to wait for that work to
+// run on the host GPU and its copy to come back before it could parse them (~145 ms of every
+// second). The macros only move those words: 0xe74 stores them in the
 // data RAM, 0xe7a uploads them with the dispatch's constant buffer (an inline upload), 0xe76
 // writes them into the inline QMD as its grid. So the front need not know them:
 // - At the list's place, the back copies the words on the host GPU into a slot of its own (the

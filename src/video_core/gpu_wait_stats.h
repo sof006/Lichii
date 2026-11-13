@@ -52,6 +52,9 @@ inline u64 Now() {
     return static_cast<u64>(Common::g_wall_clock.GetTimeNS().count());
 }
 
+/// The reads this thread waited for (EDEN_NX2_GUEST_THREAD_STATS tells read-backs apart by it).
+inline thread_local u64 t_reads{};
+
 inline void AtomicMax(std::atomic<u64>& value, u64 candidate) {
     u64 current = value.load(std::memory_order_relaxed);
     while (candidate > current &&

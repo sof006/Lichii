@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# SPDX-FileCopyrightText: 2018 yuzu Emulator Project
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 add_subdirectory(host_shaders)
@@ -18,6 +17,7 @@ add_library(video_core STATIC
     buffer_cache/buffer_cache_base.h
     buffer_cache/buffer_cache.cpp
     buffer_cache/buffer_cache.h
+    buffer_cache/indirect_buffer.h
     buffer_cache/memory_tracker_base.h
     buffer_cache/upload_order.h
     buffer_cache/usage_tracker.h
@@ -102,6 +102,7 @@ add_library(video_core STATIC
     macro_turing.h
     fence_manager.h
     front_qmd.h
+    frame_gen_choice.h
     gpu.cpp
     gpu.h
     gpu_timestamp.h
@@ -120,6 +121,12 @@ add_library(video_core STATIC
     native_qmd.h
     native_query_trace.h
     nx2.h
+    nx2_back_idle_trace.cpp
+    nx2_back_idle_trace.h
+    nx2_list_grid.cpp
+    nx2_list_grid.h
+    nx2_list_macro_trace.cpp
+    nx2_list_macro_trace.h
     nx2_cmdpage_diag.h
     nx2_debug_control.cpp
     nx2_debug_control.h
@@ -134,6 +141,7 @@ add_library(video_core STATIC
     nx2_stutter_trace.cpp
     nx2_stutter_trace.h
     nx2_perf.h
+    nx2_backx.h
     nx2_download_trace.h
     nx2_read_trace.h
     pending_maps.h
@@ -167,6 +175,8 @@ add_library(video_core STATIC
     renderer_vulkan/present/fsr3.h
     renderer_vulkan/present/fxaa.cpp
     renderer_vulkan/present/fxaa.h
+    renderer_vulkan/present/hdr_convert.cpp
+    renderer_vulkan/present/hdr_convert.h
     renderer_vulkan/present/layer.cpp
     renderer_vulkan/present/layer.h
     renderer_vulkan/present/present_push_constants.h
@@ -192,6 +202,7 @@ add_library(video_core STATIC
     renderer_vulkan/pipeline_build_failure.cpp
     renderer_vulkan/pipeline_build_failure.h
     renderer_vulkan/pipeline_build_trace.h
+    renderer_vulkan/pipeline_eviction_policy.h
     renderer_vulkan/pipeline_helper.h
     renderer_vulkan/pipeline_optimization.h
     renderer_vulkan/pipeline_shader_emission.h
@@ -322,6 +333,7 @@ add_library(video_core STATIC
     shader_environment.cpp
     shader_environment.h
     evicted_pointer_slots.h
+    bounded_store.h
     shader_handle_program.h
     shader_jobs.cpp
     shader_jobs.h
@@ -353,6 +365,7 @@ add_library(video_core STATIC
     texture_cache/format_lookup_table.h
     texture_cache/image_base.cpp
     texture_cache/image_base.h
+    texture_cache/eviction_age.h
     texture_cache/host_memory_limit.h
     texture_cache/host_mip_limits.h
     texture_cache/image_info.cpp
@@ -384,6 +397,7 @@ add_library(video_core STATIC
     textures/workers.h
     transform_feedback.cpp
     transform_feedback.h
+    vertex_input_cache.h
     video_core.cpp
     video_core.h
 )
@@ -553,13 +567,45 @@ add_custom_command(
     DEPENDS ${lowering_inputs} "${PROJECT_SOURCE_DIR}/CMakeModules/GenerateShaderLoweringStamp.cmake"
     VERBATIM)
 target_sources(video_core PRIVATE "${lowering_stamp}")
+# Shader precache marker: a hash of every source that shapes the SPIR-V built from guest code
+# (the lowering stamp's sources, the rest of the recompiler without its OpenGL backends, the shader
+# environment that hands it the recorded values and the Vulkan wrapper that calls the SPIR-V
+# backend), so a build that may emit other SPIR-V runs the precache once more
+# (ShaderWarm::EmissionStamp).
+file(GLOB_RECURSE emission_sources CONFIGURE_DEPENDS RELATIVE "${lowering_source_dir}"
+     "${lowering_source_dir}/shader_recompiler/*.cpp" "${lowering_source_dir}/shader_recompiler/*.h"
+     "${lowering_source_dir}/shader_recompiler/*.inc")
+list(FILTER emission_sources EXCLUDE REGEX "^shader_recompiler/backend/(glasm|glsl)/")
+list(APPEND emission_sources ${lowering_sources}
+     video_core/renderer_vulkan/pipeline_shader_emission.h video_core/shader_environment.cpp
+     video_core/shader_environment.h video_core/spirv_inline_control.cpp
+     video_core/spirv_inline_control.h)
+list(REMOVE_DUPLICATES emission_sources)
+list(SORT emission_sources)
+list(TRANSFORM emission_sources PREPEND "${lowering_source_dir}/" OUTPUT_VARIABLE emission_inputs)
+# Too many paths for a Windows command line: they go through a file, one per line.
+list(JOIN emission_sources "\n" emission_text)
+set(emission_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/video_core/shader_warm")
+set(emission_list "${emission_dir}/emission_sources.txt")
+file(CONFIGURE OUTPUT "${emission_list}" CONTENT "${emission_text}\n" @ONLY)
+set(emission_stamp "${emission_dir}/emission_stamp.h")
+add_custom_command(
+    OUTPUT "${emission_stamp}"
+    COMMAND ${CMAKE_COMMAND} "-DSOURCE_DIR=${lowering_source_dir}" "-DFILES_FROM=${emission_list}"
+            "-DOUTPUT=${emission_stamp}" "-DNAMESPACE=VideoCommon::ShaderWarm"
+            "-DNAME=GeneratedEmissionStamp"
+            -P "${PROJECT_SOURCE_DIR}/CMakeModules/GenerateShaderLoweringStamp.cmake"
+    DEPENDS ${emission_inputs} "${emission_list}"
+            "${PROJECT_SOURCE_DIR}/CMakeModules/GenerateShaderLoweringStamp.cmake"
+    VERBATIM)
+target_sources(video_core PRIVATE "${emission_stamp}")
 target_include_directories(video_core PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(video_core PUBLIC shader_recompiler stb bc_decoder gpu_logging)
 if (ENABLE_OPENGL)
     target_link_libraries(video_core PUBLIC glad)
 endif()
 
-if (YUZU_USE_EXTERNAL_FFMPEG)
+if (LICHII_USE_EXTERNAL_FFMPEG)
     add_dependencies(video_core ffmpeg-build)
 endif()
 
@@ -656,6 +702,8 @@ if (ENABLE_NVIDIA_DLSS)
         vulkan_common/streamline.cpp
         vulkan_common/streamline.h
         vulkan_common/streamline_api.h
+        vulkan_common/streamline_frame_gen.cpp
+        vulkan_common/streamline_frame_gen.h
     )
     target_include_directories(video_core PRIVATE "${STREAMLINE_INCLUDE_DIR}")
     target_link_libraries(video_core PRIVATE version wintrust crypt32)

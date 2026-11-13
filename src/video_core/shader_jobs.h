@@ -131,7 +131,8 @@ struct ShaderJobConfig {
     size_t driver_threads{1};
     /// Zero means DefaultShaderJobBudget().
     u64 memory_budget{};
-    /// A Background job queued this long competes with Soon jobs in submission order.
+    /// A Background job queued this long takes every other pick from the Soon jobs submitted
+    /// after it.
     std::chrono::nanoseconds background_aging{std::chrono::seconds{2}};
     /// Worker threads are named <name>Cpu and <name>Driver.
     std::string name{"ShaderJobs"};
@@ -210,6 +211,9 @@ private:
     bool budget_held{};
     size_t max_background_driver_threads{std::numeric_limits<size_t>::max()};
     size_t running_background_driver{};
+    /// The queue's last Soon or Background pick was an aged Background job ahead of Soon jobs.
+    bool cpu_aged_last{};
+    bool driver_aged_last{};
     ShaderJobStats stats;
     std::vector<std::thread> threads;
 };

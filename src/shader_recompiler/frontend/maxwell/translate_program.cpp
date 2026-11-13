@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
@@ -395,6 +394,15 @@ IR::Program TranslateProgram(ObjectPool<IR::Inst>& inst_pool, ObjectPool<IR::Blo
             }
 
             if (!normalized_host_info.support_geometry_shader_passthrough) {
+                // The lowered shader copies only Position and the generics; the mask's other
+                // bits (InstanceId, VertexId, FrontFace...) would declare stage inputs a geometry
+                // shader can't have, BaseInstance without DrawParameters among them.
+                for (size_t i = 0; i < program.info.passthrough.mask.size(); ++i) {
+                    if (i < static_cast<size_t>(IR::Attribute::PositionX) ||
+                        i > static_cast<size_t>(IR::Attribute::Generic31W)) {
+                        program.info.passthrough.mask[i] = false;
+                    }
+                }
                 program.output_vertices = GetOutputTopologyVertices(program.output_topology);
                 LowerGeometryPassthrough(program, normalized_host_info);
             }

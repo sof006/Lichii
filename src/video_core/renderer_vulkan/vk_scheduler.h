@@ -1,21 +1,24 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// SPDX-FileCopyrightText: Copyright 2019 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <thread>
 #include <utility>
 #include <queue>
 #include <source_location>
+#include <span>
 #include <vector>
 
 #include "common/alignment.h"
@@ -102,7 +105,22 @@ public:
     /// safe to touch worker resources.
     void WaitWorker();
 
-    void MarkFrameEnd(u64 frame);
+    /// Keeps the worker from executing chunks while the lock is held. Take it before submit_mutex.
+    [[nodiscard]] std::unique_lock<std::mutex> PauseWorker() {
+        return std::unique_lock{execution_mutex};
+    }
+
+    enum class FrameMark : u8 { None, Start, End, Both };
+    /// GPU thread, once per present: the frame-end mark this present gets. EDEN_DKB_FRAME_TRACE
+    /// marks every present; otherwise only the two presents after RequestGpuBusySample.
+    [[nodiscard]] FrameMark NextFrameMark();
+    void MarkFrameEnd(u64 frame, FrameMark mark);
+    /// Any thread: asks for one host GPU timestamp sample of the frame after the next present.
+    void RequestGpuBusySample() {
+        gpu_busy_marks.store(2, std::memory_order_relaxed);
+    }
+    /// Host GPU busy time of the last sampled frame, nullopt when none was taken in 3 s.
+    [[nodiscard]] std::optional<double> GpuBusyMs() const;
     void TraceGraphicsPipeline(const std::array<u64, 6>& hashes);
     void TraceComputePipeline(u64 hash);
     /// Worker thread, inside a recorded command: timestamps one draw or dispatch of a sampled
@@ -262,6 +280,15 @@ public:
             location, RecordSite::Own, 0);
     }
 
+    /// Whether anything was recorded since the last Flush or Finish, or waits to be: batched
+    /// uploads and a deferred clear reach the command buffer only at the next record or submit.
+    [[nodiscard]] bool RecordedSinceSubmit() const noexcept {
+        return record_serial != submitted_serial || uploads_pending || reordered_uploads_pending ||
+               deferred_clear.framebuffer != nullptr;
+    }
+    /// Counts a flush skipped because nothing was recorded (GPU profile).
+    static void CountSkippedFlush();
+
     /// Whether the recording thread submitted `tick` within 20 ms.
     [[nodiscard]] bool WaitForSubmission(u64 tick) const {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{20};
@@ -376,6 +403,8 @@ public:
 private:
     std::chrono::steady_clock::time_point last_flush{};
     bool flush_pending{};
+    u64 record_serial{};    ///< Commands recorded
+    u64 submitted_serial{}; ///< record_serial at the last Flush or Finish
 
     class Command {
     public:
@@ -483,6 +512,7 @@ private:
             // Uploads recorded before this command go before it.
             FlushUploads();
         }
+        ++record_serial;
         if (!chunk->Record(command)) {
             DispatchWork();
             (void)chunk->Record(command);
@@ -596,6 +626,17 @@ private:
     bool trace_gpu_sampling{};
     bool trace_gpu_pending{};
     bool trace_gpu_failed{};
+    FrameMark trace_frame_mark{};
+    /// The pending sample covers exactly one frame, so its busy time can be shown.
+    bool trace_gpu_publish{};
+
+    std::atomic<u32> gpu_busy_marks{};
+    struct GpuBusySample {
+        double ms;
+        std::chrono::steady_clock::time_point taken;
+    };
+    mutable std::mutex gpu_busy_mutex;
+    std::optional<GpuBusySample> gpu_busy;
 
     /// TEST: EDEN_NX2_READ_TRACE
     std::unique_ptr<ReadTraceState> read_trace;
