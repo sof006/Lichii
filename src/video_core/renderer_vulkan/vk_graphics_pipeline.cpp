@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
+#include <future>
 #include <string>
 #include <iostream>
 #include <span>
@@ -2235,6 +2236,9 @@ vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass, bool fast,
     if (IsMeshPipeline() && !device.IsExtMeshShaderSupported() && !mesh_emulation) {
         return {};
     }
+    // Mesh emulation's compute builds (below). A future of std::async joins when it goes, so an
+    // exception on this thread waits for them too.
+    std::vector<std::future<void>> mesh_parts;
     if (mesh_emulation) {
         // The mesh program (stage 0, or mesh_stage after a task program in stage 0) is built as
         // a compute shader, and so is the task program; the draw uses the vertex shader that
@@ -2246,8 +2250,10 @@ vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass, bool fast,
             .pNext = nullptr,
             .requiredSubgroupSize = GuestWarpSize,
         };
-        // Their binaries are stored under the graphics key, one key per program
-        const auto make_compute = [&](VkShaderModule module, VkPipelineLayout layout,
+        // Their binaries are stored under the graphics key, one key per program.
+        // Self-contained (a copy of the subgroup size struct): it runs on the threads below.
+        const auto make_compute = [this, compute_subgroup_size_ci](
+                                      VkShaderModule module, VkPipelineLayout layout,
                                       const Shader::Info* info, u64 program) {
             const bool uses_warp_ops{info && (info->uses_subgroup_vote ||
                                               info->uses_subgroup_invocation_id ||
@@ -2291,15 +2297,25 @@ vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass, bool fast,
             return made;
         };
         mesh_vertex_module = BuildShader(device, mesh_emulation->vertex_spirv);
-        mesh_compute_pipeline = make_compute(*spv_modules[mesh_emulation->mesh_stage],
-                                             *pipeline_layout,
-                                             &stage_infos[mesh_emulation->mesh_stage], 1);
+        // The compute parts are built on threads of their own while this one builds the pipeline
+        // that draws. One after the other they took up to 6 s on AMD's Windows driver, and the
+        // geometry stays missing meanwhile; the driver builds them side by side in the time of
+        // the slowest.
+        const size_t mesh_stage = mesh_emulation->mesh_stage;
+        mesh_parts.push_back(std::async(std::launch::async, [this, make_compute, mesh_stage] {
+            mesh_compute_pipeline = make_compute(*spv_modules[mesh_stage], *pipeline_layout,
+                                                 &stage_infos[mesh_stage], 1);
+        }));
         if (mesh_emulation->has_task) {
-            task_compute_pipeline =
-                make_compute(*spv_modules[0], *pipeline_layout, &stage_infos[0], 2);
             distribution_module = BuildShader(device, mesh_emulation->distribution_spirv);
-            distribution_pipeline =
-                make_compute(*distribution_module, *distribution_layout, nullptr, 3);
+            mesh_parts.push_back(std::async(std::launch::async, [this, make_compute] {
+                task_compute_pipeline =
+                    make_compute(*spv_modules[0], *pipeline_layout, &stage_infos[0], 2);
+            }));
+            mesh_parts.push_back(std::async(std::launch::async, [this, make_compute] {
+                distribution_pipeline =
+                    make_compute(*distribution_module, *distribution_layout, nullptr, 3);
+            }));
         }
     }
     PipelineStates states;
@@ -2420,6 +2436,9 @@ vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass, bool fast,
             states.color_blend_ci.attachmentCount
         );
         GPU::Logging::GPULogger::GetInstance().LogPipelineStateChange(pipeline_info);
+    }
+    for (std::future<void>& part : mesh_parts) {
+        part.get(); // rethrows what the part's build threw
     }
     return created;
 }

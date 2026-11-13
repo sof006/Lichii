@@ -528,6 +528,8 @@ std::string Summary(const std::string& log) {
     double unoptimized_blend = 0;
     std::vector<std::string_view> header, precache, crashes, errors;
     std::string_view cached_first;
+    u64 compute_rebuilds = 0, compute_rebuilds_unwaited = 0, mesh_builds = 0, evicted = 0;
+    double mesh_ms = 0;
     u64 error_count = 0, critical_count = 0, warning_count = 0;
     double last_time = 0;
 
@@ -618,6 +620,15 @@ std::string Summary(const std::string& log) {
             unoptimized_blend = NumberAfter(line, "unoptimized_blend: ").value_or(0);
         } else if (line.find("Nx2Perf cached_first:") != line.npos) {
             cached_first = line.substr(line.find("cached_first:"));
+        } else if (line.find("Rebuilding compute program") != line.npos) {
+            ++compute_rebuilds;
+        } else if (line.find("Nx2Perf compute rebuild:") != line.npos) {
+            ++compute_rebuilds_unwaited;
+        } else if (line.find("Nx2Perf mesh_emulation:") != line.npos) {
+            ++mesh_builds;
+            mesh_ms += NumberAfter(line, "driver build ").value_or(0);
+        } else if (line.find("graphics pipelines unused for") != line.npos) {
+            evicted += static_cast<u64>(NumberAfter(line, "Evicted ").value_or(0));
         }
     }
 
@@ -681,8 +692,14 @@ std::string Summary(const std::string& log) {
     text += fmt::format("Compute dispatches that waited for their pipeline: {} ({} of 100 ms or "
                         "more), {:.0f} ms in total, longest {:.0f} ms\n",
                         compute_waits, compute_waits_long, compute_wait_ms, compute_wait_max);
-    text += fmt::format("Draws held for their pipeline: {}, {:.0f} ms in total, longest {:.0f} ms\n\n",
+    text += fmt::format("Draws held for their pipeline: {}, {:.0f} ms in total, longest {:.0f} ms\n",
                         held_draws, held_ms, held_max);
+    text += fmt::format("Compute programs rebuilt for a pointer set later: {} ({} took over "
+                        "without a wait)\n",
+                        compute_rebuilds, compute_rebuilds_unwaited);
+    text += fmt::format("Mesh emulation compute builds over 100 ms: {}, {:.0f} ms in total\n",
+                        mesh_builds, mesh_ms);
+    text += fmt::format("Graphics pipelines destroyed as unused: {}\n\n", evicted);
     section("Errors (first 60)", errors);
     return text;
 }
