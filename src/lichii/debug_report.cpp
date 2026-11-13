@@ -365,6 +365,9 @@ private:
         QuaZipFile out{&zip};
         QuaZipNewInfo info{name};
         info.dateTime = time;
+        // Without these a Linux unzip creates files nobody may read.
+        info.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ReadGroup |
+                            QFile::ReadOther);
         if (!out.open(QIODevice::WriteOnly, info, nullptr, 0, Z_DEFLATED, 6)) {
             return false;
         }
