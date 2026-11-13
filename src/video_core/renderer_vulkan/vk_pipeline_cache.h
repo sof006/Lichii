@@ -119,6 +119,9 @@ struct ComputePipelineCacheEntry {
     u32 rebuilds{};
     /// Whether a dispatch looked it up yet (kept only with EDEN_NX2_STUTTER_TRACE)
     bool used{};
+    /// A rebuilt translation the driver is still building: it takes this one's place once built,
+    /// and until then the dispatches keep this one.
+    std::unique_ptr<ComputePipelineCacheEntry> pending;
 
     [[nodiscard]] ComputePipeline* Get(bool native, GPUVAddr address,
                                        const ComputePipelineCacheKey& key) const;

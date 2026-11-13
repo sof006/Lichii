@@ -2273,11 +2273,22 @@ vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass, bool fast,
                 .basePipelineHandle = nullptr,
                 .basePipelineIndex = 0,
             };
-            return binaries ? binaries->CreateComputePipeline(
-                                  compute_ci, *pipeline_cache,
-                                  GraphicsRecordKey(key) ^ (program * 0x9e3779b97f4a7c15ULL))
-                            : device.GetLogical().CreateComputePipeline(compute_ci,
-                                                                        *pipeline_cache);
+            const auto begin = std::chrono::steady_clock::now();
+            vk::Pipeline made =
+                binaries ? binaries->CreateComputePipeline(
+                               compute_ci, *pipeline_cache,
+                               GraphicsRecordKey(key) ^ (program * 0x9e3779b97f4a7c15ULL))
+                         : device.GetLogical().CreateComputePipeline(compute_ci, *pipeline_cache);
+            const double ms = std::chrono::duration<double, std::milli>(
+                                  std::chrono::steady_clock::now() - begin)
+                                  .count();
+            if (ms > 100.0) {
+                // 1 the mesh program, 2 the task program, 3 the distribution pass
+                LOG_INFO(Render_Vulkan,
+                         "Nx2Perf mesh_emulation: {:016x} compute part {} driver build {:.1f} ms",
+                         key.Hash(), program, ms);
+            }
+            return made;
         };
         mesh_vertex_module = BuildShader(device, mesh_emulation->vertex_spirv);
         mesh_compute_pipeline = make_compute(*spv_modules[mesh_emulation->mesh_stage],

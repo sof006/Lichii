@@ -428,6 +428,7 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
             spv_module.reset();
         }
         std::scoped_lock lock{build_mutex};
+        build_succeeded = static_cast<bool>(pipeline);
         is_built = true;
         build_condvar.notify_one();
         if (shader_notify) {

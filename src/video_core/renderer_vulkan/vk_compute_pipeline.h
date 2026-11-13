@@ -78,6 +78,16 @@ public:
         return static_cast<bool>(pipeline);
     }
 
+    /// Whether its first build ended: a dispatch no longer waits for it
+    [[nodiscard]] bool IsBuilt() const noexcept {
+        return is_built.load(std::memory_order_acquire);
+    }
+
+    /// Whether that build made a pipeline. Only valid once IsBuilt().
+    [[nodiscard]] bool BuildSucceeded() const noexcept {
+        return build_succeeded.load(std::memory_order_acquire);
+    }
+
     [[nodiscard]] u64 ShaderHash() const noexcept {
         return shader_hash;
     }
@@ -157,6 +167,7 @@ private:
     std::condition_variable build_condvar;
     std::mutex build_mutex;
     std::atomic_bool is_built{false};
+    std::atomic_bool build_succeeded{false};
     /// Shader cache v2: the job that builds it (PipelineBuildQueue::jobs)
     VideoCommon::ShaderJobScheduler* jobs{};
     VideoCommon::ShaderJobHandle job;

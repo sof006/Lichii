@@ -1160,22 +1160,51 @@ ComputePipeline* PipelineCache::CurrentComputePipeline(u64& native_key) {
     };
     const auto [pair, is_new]{compute_cache.try_emplace(key)};
     auto& entry{pair->second};
+    const auto replace = [&](ComputePipelineCacheEntry&& rebuilt) {
+        if (entry.pipeline) {
+            retired_compute_pipelines.emplace_back(scheduler.CurrentTick(),
+                                                   std::move(entry.pipeline));
+        }
+        rebuilt.rebuilds = entry.rebuilds + 1;
+        rebuilt.used = entry.used;
+        entry = std::move(rebuilt);
+    };
     if (is_new) {
         entry = CreateComputePipeline(key, shader);
+    } else if (entry.pending) {
+        if (entry.pending->pipeline->IsBuilt()) {
+            auto pending{std::move(entry.pending)};
+            if (pending->pipeline->BuildSucceeded()) {
+                LOG_INFO(Render_Vulkan,
+                         "Nx2Perf compute rebuild: {:016x} takes over, built without a wait",
+                         key.unique_hash);
+                replace(std::move(*pending));
+            } else {
+                LOG_WARNING(Render_Vulkan,
+                            "Keeping compute shader {:016x}: its rebuild made no pipeline",
+                            key.unique_hash);
+                entry.rebuilds = MaxComputeRebuilds;
+            }
+        }
     } else if (!entry.null_pointer_slots.empty() && entry.rebuilds < MaxComputeRebuilds &&
                StaleNullPointerSlot(entry)) {
         // The translation dropped accesses through a pointer that was null back then. Which slots
         // the game fills depends on the area, so the new one keeps binding every pointer this one
         // binds, null now or not: a null pointer binds nothing.
         auto rebuilt{CreateComputePipeline(key, shader, entry.mapped_pointers)};
-        if (rebuilt.pipeline) {
-            if (entry.pipeline) {
-                retired_compute_pipelines.emplace_back(scheduler.CurrentTick(),
-                                                       std::move(entry.pipeline));
-            }
-            rebuilt.rebuilds = entry.rebuilds + 1;
-            rebuilt.used = entry.used;
-            entry = std::move(rebuilt);
+        // EDEN_NX2_COMPUTE_REBUILD_WAIT=1: dispatch with the rebuilt translation at once, waiting
+        // for the driver to build it (seconds on AMD's Windows driver).
+        static const bool wait_for_rebuild = [] {
+            const char* const value = std::getenv("EDEN_NX2_COMPUTE_REBUILD_WAIT");
+            return value != nullptr && value[0] == '1';
+        }();
+        if (rebuilt.pipeline && !wait_for_rebuild && !rebuilt.pipeline->IsBuilt() &&
+            entry.pipeline && entry.pipeline->IsBuilt() && entry.pipeline->BuildSucceeded()) {
+            // The dispatches keep the translation they had, which binds nothing for the pointer,
+            // until the driver has built the new one (the next branch above).
+            entry.pending = std::make_unique<ComputePipelineCacheEntry>(std::move(rebuilt));
+        } else if (rebuilt.pipeline) {
+            replace(std::move(rebuilt));
         } else {
             // Keep the working translation when the new one cannot be built (for example a
             // narrow access that now stays global across two buffers), and stop retrying.
@@ -1840,7 +1869,13 @@ bool ComputeNoInline();
 /// Whether shared shader functions are built as calls (compute bit 0, graphics bit 1), for the
 /// precache markers: the SPIR-V the driver compiled differs between the two modes.
 u32 NoInlineBits() {
-    return (ComputeNoInline() ? 1U : 0U) | (GraphicsNoInline() ? 2U : 0U);
+    // Raised when a change to the translation or the SPIR-V emission reaches many shaders: what
+    // the driver compiled for the precache is then stale, so the precache runs once more.
+    // 1: light table descriptor arrays (#1485), SSA and storage buffer tracking (#1320), the task
+    //    program's mesh workgroup count (#1492).
+    constexpr u32 EmissionRevision = 1;
+    return (ComputeNoInline() ? 1U : 0U) | (GraphicsNoInline() ? 2U : 0U) |
+           (EmissionRevision << 8);
 }
 } // Anonymous namespace
 
@@ -2514,8 +2549,11 @@ void PipelineCache::EvictUnusedPipelines() {
         constexpr u64 DesktopRamFloor = 28ULL << 30;
         constexpr u64 DesktopVramFloor = 10ULL << 30;
         constexpr u64 HealthyCommitRoom = 6ULL << 30;
+        // The driver's budget counts: GetDeviceLocalMemory is capped near 7 GiB on any card unless
+        // VRAM use is set to aggressive, which kept this from ever applying.
+        const u64 vram = (std::max)(device.GetDeviceLocalMemory(), device.GetDeviceMemoryBudget());
         if (Common::GetMemInfo().TotalPhysicalMemory >= DesktopRamFloor &&
-            device.GetDeviceLocalMemory() >= DesktopVramFloor) {
+            vram >= DesktopVramFloor) {
             const std::optional<u64> commit_room = Common::GetSystemCommitRoom();
             if (!commit_room || *commit_room >= HealthyCommitRoom) {
                 return;
