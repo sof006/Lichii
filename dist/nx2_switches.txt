@@ -78,8 +78,9 @@ EDEN_NX2_FENCE_BATCH=1
 # folder would not read the previous one's. At start the previous copy's driver cache is renamed
 # for this copy (and older copies' leftovers removed). =0 leaves the files as they are.
 #LICHII_AMD_CACHE_ADOPT=0
-# Windows: debug reports in lichii-reports next to lichii.exe (on exit after a game, after a
-# crash, and Help > Save Debug Report), with hitches over 100 ms and shader builds logged.
+# Windows and Linux: debug reports in lichii-reports next to lichii.exe or the AppImage (on exit
+# after a game, after a crash - on Linux at the next start - and Help > Save Debug Report), with
+# hitches over 100 ms and shader builds logged.
 # =0 turns them off, and the extra logging with them.
 #LICHII_DEBUG_REPORT=0
 # The extra logging alone: =0 keeps the reports without it.

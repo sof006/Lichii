@@ -16,11 +16,18 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
 #include <windows.h>
 
 #include <dxgi.h>
 #include <intrin.h>
 #include <shellapi.h>
+#else
+#include <sys/utsname.h>
+#include <unistd.h>
+
+extern char** environ;
+#endif
 
 #include <QByteArray>
 #include <QDateTime>
@@ -36,7 +43,10 @@
 #include "common/fs/path_util.h"
 #include "common/logging.h"
 #include "common/scm_rev.h"
+#include "common/thread.h"
+#ifdef _WIN32
 #include "common/windows/crash_handler.h"
+#endif
 #include "lichii/debug_report.h"
 
 namespace DebugReport {
@@ -48,8 +58,16 @@ using Clock = std::chrono::system_clock;
 constexpr size_t KeepReports = 10;
 constexpr const char* ReportPrefix = "lichii-report-";
 
+using ProcessId = u32;
+
+#ifdef _WIN32
+constexpr char Separator = '\\';
+#else
+constexpr char Separator = '/';
+#endif
+
 struct Session {
-    DWORD pid{};
+    ProcessId pid{};
     Clock::time_point start{};
     std::vector<u64> games;
 };
@@ -66,7 +84,11 @@ bool ReadEnabled() {
 
 void SetDefault(const char* name, const char* value) {
     if (std::getenv(name) == nullptr) {
+#ifdef _WIN32
         _putenv_s(name, value);
+#else
+        setenv(name, value, 1);
+#endif
     }
 }
 
@@ -75,13 +97,29 @@ std::string Utf8(const fs::path& path) {
 }
 
 QString QPath(const fs::path& path) {
+#ifdef _WIN32
     return QString::fromStdWString(path.wstring());
+#else
+    return QString::fromStdString(path.string());
+#endif
 }
 
-/// The Windows user name appears in every path under the profile; reports show "user" instead.
+/// The user name appears in every path under the profile or home folder; reports show "user"
+/// instead.
 void Censor(std::string& text) {
     static const std::string name = [] {
+#ifdef _WIN32
         const char* const value = std::getenv("USERNAME");
+#else
+        const char* value = std::getenv("USER");
+        if (value == nullptr) {
+            value = std::getenv("LOGNAME");
+        }
+        // "user" would be replaced by itself.
+        if (value != nullptr && std::strcmp(value, "user") == 0) {
+            value = nullptr;
+        }
+#endif
         return value != nullptr && std::strlen(value) >= 3 ? std::string{value} : std::string{};
     }();
     if (name.empty()) {
@@ -115,6 +153,15 @@ bool CanWrite(const fs::path& dir) {
     return true;
 }
 
+ProcessId CurrentPid() {
+#ifdef _WIN32
+    return GetCurrentProcessId();
+#else
+    return static_cast<ProcessId>(getpid());
+#endif
+}
+
+#ifdef _WIN32
 fs::path ExePath() {
     std::wstring buffer(32768, L'\0');
     const DWORD length =
@@ -122,6 +169,63 @@ fs::path ExePath() {
     buffer.resize(length);
     return fs::path{buffer};
 }
+
+/// The folder the reports go in when it can be written to.
+fs::path BesideDirectory() {
+    return Common::FS::GetExeDirectory();
+}
+#else
+/// A running program's file (inside the AppImage's mount when run from one).
+fs::path ProgramFile(std::string_view pid = "self") {
+    std::error_code ec;
+    fs::path file = fs::read_symlink(fmt::format("/proc/{}/exe", pid), ec);
+    if (ec) {
+        return {};
+    }
+    // The kernel's mark for a file replaced while it runs.
+    std::string name = file.filename().string();
+    if (constexpr std::string_view deleted = " (deleted)"; name.ends_with(deleted)) {
+        name.resize(name.size() - deleted.size());
+        file.replace_filename(name);
+    }
+    return file;
+}
+
+/// The AppImage when Lichii runs from one, the program otherwise.
+fs::path ExePath() {
+    if (const char* const appimage = std::getenv("APPIMAGE");
+        appimage != nullptr && appimage[0] == '/') {
+        return fs::path{appimage};
+    }
+    return ProgramFile();
+}
+
+/// The folder the reports go in when it can be written to: the AppImage's, like lichii-shaders.
+fs::path BesideDirectory() {
+    return ExePath().parent_path();
+}
+
+/// The first line of a file that starts with key, after the key.
+std::string FileField(const char* file, std::string_view key) {
+    std::ifstream in{file};
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.starts_with(key)) {
+            return line.substr(key.size());
+        }
+    }
+    return {};
+}
+
+std::string Trimmed(std::string text) {
+    const auto keep = [](char c) { return c != ' ' && c != '\t' && c != '"' && c != ':'; };
+    text.erase(text.begin(), std::ranges::find_if(text, keep));
+    while (!text.empty() && !keep(text.back())) {
+        text.pop_back();
+    }
+    return text;
+}
+#endif
 
 std::string LocalTime(Clock::time_point time) {
     const auto seconds =
@@ -133,7 +237,7 @@ std::string LocalTime(Clock::time_point time) {
 
 // Session markers: session-<pid>.txt in the report folder while that process runs.
 
-fs::path MarkerPath(DWORD pid) {
+fs::path MarkerPath(ProcessId pid) {
     return ReportDirectory() / fmt::format("session-{}.txt", pid);
 }
 
@@ -166,7 +270,7 @@ std::optional<Session> ReadMarker(const fs::path& path) {
         const std::string key = line.substr(0, eq);
         const std::string value = line.substr(eq + 1);
         if (key == "pid") {
-            session.pid = static_cast<DWORD>(std::strtoul(value.c_str(), nullptr, 10));
+            session.pid = static_cast<ProcessId>(std::strtoul(value.c_str(), nullptr, 10));
         } else if (key == "start") {
             session.start = Clock::time_point{std::chrono::seconds{std::strtoll(value.c_str(), nullptr, 10)}};
         } else if (key == "games") {
@@ -184,10 +288,15 @@ std::optional<Session> ReadMarker(const fs::path& path) {
 }
 
 /// Whether pid is a running lichii.exe (process ids are reused).
-bool IsRunningLichii(DWORD pid) {
-    if (pid == GetCurrentProcessId()) {
+bool IsRunningLichii(ProcessId pid) {
+    if (pid == CurrentPid()) {
         return true;
     }
+#ifndef _WIN32
+    // Another user's process cannot be read, and is not this user's session either.
+    const fs::path other = ProgramFile(std::to_string(pid));
+    return !other.empty() && other.filename() == ProgramFile().filename();
+#else
     const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
     if (process == nullptr) {
         return false;
@@ -204,6 +313,7 @@ bool IsRunningLichii(DWORD pid) {
     }
     CloseHandle(process);
     return running;
+#endif
 }
 
 // Zip writing.
@@ -305,6 +415,7 @@ std::string Redact(std::string text) {
     return result;
 }
 
+#ifdef _WIN32
 std::string CpuName() {
     int info[4]{};
     __cpuid(info, 0x80000000);
@@ -364,6 +475,59 @@ std::string GpuText() {
     factory->Release();
     return text;
 }
+#else
+std::string CpuName() {
+    const std::string name = Trimmed(FileField("/proc/cpuinfo", "model name"));
+    return name.empty() ? "unknown" : name;
+}
+
+std::string OsVersion() {
+    std::string name = Trimmed(FileField("/etc/os-release", "PRETTY_NAME="));
+    if (name.empty()) {
+        name = "Linux";
+    }
+    utsname kernel{};
+    if (uname(&kernel) == 0) {
+        name += fmt::format(", kernel {}", kernel.release);
+    }
+    return name;
+}
+
+/// The graphics cards the kernel lists, with their kernel drivers. The Vulkan driver and its
+/// version are in the log.
+std::string GpuText() {
+    std::string text;
+    std::error_code ec;
+    std::vector<fs::path> cards;
+    for (const auto& entry : fs::directory_iterator("/sys/class/drm", ec)) {
+        const std::string name = entry.path().filename().string();
+        if (name.starts_with("card") && name.find('-') == std::string::npos) {
+            cards.push_back(entry.path());
+        }
+    }
+    std::ranges::sort(cards);
+    for (const fs::path& card : cards) {
+        const fs::path device = card / "device";
+        const auto read = [&device](const char* file) {
+            std::ifstream in{device / file};
+            std::string value;
+            std::getline(in, value);
+            return value.starts_with("0x") ? value.substr(2) : value;
+        };
+        std::error_code ec2;
+        const fs::path driver = fs::read_symlink(device / "driver", ec2);
+        text += fmt::format("  {}: vendor {}, device {}, kernel driver {}",
+                            card.filename().string(), read("vendor"), read("device"),
+                            ec2 ? std::string{"unknown"} : driver.filename().string());
+        if (const std::string vram = read("mem_info_vram_total"); !vram.empty()) {
+            text += fmt::format(", {} MiB video memory",
+                                std::strtoull(vram.c_str(), nullptr, 10) >> 20);
+        }
+        text += '\n';
+    }
+    return text.empty() ? "  (none listed in /sys/class/drm)\n" : text;
+}
+#endif
 
 std::string SystemText(Kind kind, const Session& session) {
     std::string text;
@@ -381,6 +545,7 @@ std::string SystemText(Kind kind, const Session& session) {
     }
     text += fmt::format("Games: {}\n", games.empty() ? "none" : games);
     text += fmt::format("OS: {}\n", OsVersion());
+#ifdef _WIN32
     SYSTEM_INFO system{};
     GetNativeSystemInfo(&system);
     text += fmt::format("CPU: {} ({} logical processors)\n", CpuName(),
@@ -392,11 +557,26 @@ std::string SystemText(Kind kind, const Session& session) {
                             memory.ullTotalPhys >> 20, memory.ullAvailPhys >> 20,
                             memory.ullTotalPageFile >> 20, memory.ullAvailPageFile >> 20);
     }
+#else
+    text += fmt::format("CPU: {} ({} logical processors)\n", CpuName(),
+                        std::thread::hardware_concurrency());
+    const auto mib = [](std::string_view key) {
+        return std::strtoull(Trimmed(FileField("/proc/meminfo", key)).c_str(), nullptr, 10) >> 10;
+    };
+    text += fmt::format("Memory: {} MiB, {} MiB available; swap {} MiB, {} MiB free\n",
+                        mib("MemTotal:"), mib("MemAvailable:"), mib("SwapTotal:"),
+                        mib("SwapFree:"));
+#endif
     text += "GPUs:\n" + GpuText();
+#ifdef _WIN32
     text += fmt::format("lichii.exe: {}\n", Utf8(ExePath()));
+#else
+    text += fmt::format("Program: {}\n", Utf8(ExePath()));
+#endif
     text += fmt::format("Data folder: {}\n", Utf8(Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir)));
     text += fmt::format("Shader folder: {}\n",
                         Utf8(Common::FS::GetEdenPath(Common::FS::EdenPath::ShaderDir)));
+#ifdef _WIN32
     text += "Environment (EDEN_*, LICHII_*, AMD_*, VK_*, DXVK_*):\n";
     if (wchar_t* const block = GetEnvironmentStringsW()) {
         for (const wchar_t* entry = block; *entry != L'\0'; entry += std::wcslen(entry) + 1) {
@@ -410,6 +590,20 @@ std::string SystemText(Kind kind, const Session& session) {
         }
         FreeEnvironmentStringsW(block);
     }
+#else
+    text += "Environment (EDEN_*, LICHII_*, AMD_*, VK_*, DXVK_*, MESA_*, RADV_*, session):\n";
+    for (char** entry = environ; entry != nullptr && *entry != nullptr; ++entry) {
+        const std::string_view line{*entry};
+        for (const std::string_view prefix :
+             {"EDEN_", "LICHII_", "AMD_", "VK_", "DXVK_", "MESA_", "RADV_", "APPIMAGE=",
+              "XDG_SESSION_TYPE=", "XDG_CURRENT_DESKTOP=", "QT_QPA_PLATFORM="}) {
+            if (line.starts_with(prefix)) {
+                text += fmt::format("  {}\n", line);
+                break;
+            }
+        }
+    }
+#endif
     Censor(text);
     return text;
 }
@@ -446,7 +640,7 @@ std::string ShaderCacheText() {
         for (const auto& entry : fs::directory_iterator(root, ec)) {
             const std::string name = Utf8(entry.path().filename());
             if (entry.is_directory(ec)) {
-                text += fmt::format("  {}\\: {}\n", name, summarize(entry.path()));
+                text += fmt::format("  {}{}: {}\n", name, Separator, summarize(entry.path()));
                 // Title folders: their files one by one (a few dozen).
                 size_t listed = 0;
                 for (const auto& child : fs::directory_iterator(entry.path(), ec)) {
@@ -457,7 +651,8 @@ std::string ShaderCacheText() {
                     std::error_code ec3;
                     const std::string child_name = Utf8(child.path().filename());
                     if (child.is_directory(ec3)) {
-                        text += fmt::format("    {}\\: {}\n", child_name, summarize(child.path()));
+                        text += fmt::format("    {}{}: {}\n", child_name, Separator,
+                                            summarize(child.path()));
                     } else {
                         text += fmt::format(
                             "    {} {} bytes {}\n", child_name, child.file_size(ec3),
@@ -474,17 +669,29 @@ std::string ShaderCacheText() {
     };
     const fs::path shader_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::ShaderDir);
     describe(shader_dir, "Shader folder");
+#ifdef _WIN32
     if (const fs::path driver_dir = Common::FS::GetDriverShaderCacheDir(); !driver_dir.empty()) {
         describe(driver_dir / "AMD" / "VkCache", "AMD driver cache files");
     }
     const fs::path home_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir) / "cache" / "shader";
+#else
+    // Mesa's cache is the "driver" folder of the shader folder when that is beside the AppImage.
+    const fs::path home_dir = Common::FS::GetHomeShaderDir();
+#endif
     std::error_code ec;
     if (!fs::equivalent(home_dir, shader_dir, ec)) {
         describe(home_dir, "Data folder shaders");
     }
+#ifdef _WIN32
     if (const char* const local = std::getenv("LOCALAPPDATA")) {
         describe(fs::path{local} / "AMD" / "VkCache", "AMD driver's own cache folder");
     }
+#else
+    if (const char* const mesa = std::getenv("MESA_SHADER_CACHE_DIR");
+        mesa != nullptr && Common::FS::GetDriverShaderCacheDir().empty()) {
+        describe(fs::path{mesa}, "Mesa shader cache (MESA_SHADER_CACHE_DIR)");
+    }
+#endif
     Censor(text);
     return text;
 }
@@ -765,6 +972,7 @@ fs::path Write(Kind kind, const Session& session) {
                 zip.AddText(QString::fromStdString("config/custom/" + file), Redact(*config));
             }
         }
+#ifdef _WIN32
         if (const auto switches = ReadFile(Common::FS::GetExeDirectory() / "nx2_switches.txt")) {
             zip.AddText(QStringLiteral("nx2_switches.txt"), *switches);
         }
@@ -772,6 +980,15 @@ fs::path Write(Kind kind, const Session& session) {
                                            "nx2_switches.txt")) {
             zip.AddText(QStringLiteral("nx2_switches-appdata.txt"), *switches);
         }
+#else
+        if (const auto switches = ReadFile(ProgramFile().parent_path() / "nx2_switches.txt")) {
+            zip.AddText(QStringLiteral("nx2_switches.txt"), *switches);
+        }
+        if (const auto switches = ReadFile(Common::FS::GetDataDirectory("XDG_CONFIG_HOME") /
+                                           EDEN_DIR / "nx2_switches.txt")) {
+            zip.AddText(QStringLiteral("nx2_switches-user.txt"), *switches);
+        }
+#endif
         if (!zip.Close()) {
             fs::remove(part, ec);
             return {};
@@ -795,7 +1012,7 @@ bool Enabled() {
 
 fs::path ReportDirectory() {
     static const fs::path dir = [] {
-        const fs::path beside = Common::FS::GetExeDirectory() / "lichii-reports";
+        const fs::path beside = BesideDirectory() / "lichii-reports";
         if (CanWrite(beside)) {
             return beside;
         }
@@ -805,6 +1022,12 @@ fs::path ReportDirectory() {
 }
 
 bool RunCrashReportProcess(int argc, char** argv) {
+#ifndef _WIN32
+    // Linux has no crash helper: a crashed session's report is written at the next start.
+    static_cast<void>(argc);
+    static_cast<void>(argv);
+    return false;
+#else
     if (argc < 3 || std::strcmp(argv[1], "--debug-report") != 0) {
         return false;
     }
@@ -832,6 +1055,7 @@ bool RunCrashReportProcess(int argc, char** argv) {
         ShellExecuteW(nullptr, L"open", L"explorer.exe", arguments.c_str(), nullptr, SW_SHOWNORMAL);
     }
     return true;
+#endif
 }
 
 void BeginSession() {
@@ -870,11 +1094,13 @@ void BeginSession() {
     }
 
     std::scoped_lock lock{g_mutex};
-    g_session = Session{.pid = GetCurrentProcessId(), .start = Clock::now()};
+    g_session = Session{.pid = CurrentPid(), .start = Clock::now()};
     WriteMarker(g_session);
     g_began = true;
+#ifdef _WIN32
     Common::Windows::SetCrashCommand(
         L"\"" + ExePath().wstring() + L"\" --debug-report " + std::to_wstring(g_session.pid));
+#endif
 }
 
 void StartLogFlush() {
@@ -882,7 +1108,7 @@ void StartLogFlush() {
         return;
     }
     g_flusher.emplace([](std::stop_token stop) {
-        SetThreadDescription(GetCurrentThread(), L"LogFlush");
+        Common::SetCurrentThreadName("LogFlush");
         while (!stop.stop_requested()) {
             for (int tick = 0; tick < 20 && !stop.stop_requested(); ++tick) {
                 std::this_thread::sleep_for(std::chrono::milliseconds{100});
@@ -912,7 +1138,7 @@ fs::path WriteNow(Kind kind) {
         std::scoped_lock lock{g_mutex};
         session = g_session;
         if (session.pid == 0) {
-            session = Session{.pid = GetCurrentProcessId(), .start = Clock::now()};
+            session = Session{.pid = CurrentPid(), .start = Clock::now()};
         }
     }
     Common::Log::Stop(); // flushes
@@ -937,7 +1163,9 @@ void EndSession() {
         Common::Log::Stop(); // flushes
         Write(Kind::Exit, session);
     }
+#ifdef _WIN32
     Common::Windows::SetCrashCommand({});
+#endif
     std::error_code ec;
     fs::remove(MarkerPath(session.pid), ec);
 }

@@ -308,10 +308,10 @@ static void RemoveTitlebarFilter() {
 #ifdef LICHII_CRASH_DUMPS
 #include "lichii/breakpad.h"
 #endif
+#include "lichii/debug_report.h"
 #ifdef _WIN32
 #include <QProcess>
 #include "lichii/amd_driver_cache.h"
-#include "lichii/debug_report.h"
 #endif
 
 using namespace Common::Literals;
@@ -400,8 +400,10 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     : ui{std::make_unique<Ui::MainWindow>()},
       input_subsystem{std::make_shared<InputCommon::InputSubsystem>()}, user_data_migrator{this} {
     QtCommon::Init(this);
-#ifdef _WIN32
+#ifdef LICHII_HAS_DEBUG_REPORT
     DebugReport::StartLogFlush();
+#endif
+#ifdef _WIN32
     AmdDriverCache::LogResult();
 #endif
 
@@ -1769,7 +1771,7 @@ void MainWindow::ConnectMenuEvents() {
             !Settings::values.recommended_settings_backup.GetValue().empty());
     });
     connect_menu(ui->action_Data_Manager, &MainWindow::OnDataDialog);
-#ifdef _WIN32
+#ifdef LICHII_HAS_DEBUG_REPORT
     if (DebugReport::Enabled()) {
         auto* report_action = new QAction(tr("Save Debug Report"), this);
         ui->menu_Help->insertAction(ui->action_Log_Folder, report_action);
@@ -1780,9 +1782,18 @@ void MainWindow::ConnectMenuEvents() {
                                      tr("The debug report could not be written."));
                 return;
             }
+#ifdef _WIN32
             const QString path = QString::fromStdWString(report.wstring());
             QProcess::startDetached(QStringLiteral("explorer.exe"),
                                     {QStringLiteral("/select,"), QDir::toNativeSeparators(path)});
+#else
+            // No file manager call selects a file everywhere: say where it is, open its folder.
+            const QString path = QString::fromStdString(report.string());
+            QMessageBox::information(this, tr("Save Debug Report"),
+                                     tr("The debug report was saved:\n\n%1").arg(path));
+            QDesktopServices::openUrl(
+                QUrl::fromLocalFile(QString::fromStdString(report.parent_path().string())));
+#endif
         });
     }
 #endif
@@ -2236,7 +2247,7 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         QtCommon::system->ApplySettings();
     }
 
-#ifdef _WIN32
+#ifdef LICHII_HAS_DEBUG_REPORT
     DebugReport::NoteGame(title_id);
 #endif
     PrepareShaderPrecache(title_id, std::filesystem::path{filename.toStdU16String()});

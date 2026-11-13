@@ -30,12 +30,12 @@
 #include <cstring>
 #endif
 
+#include "debug_report.h"
 #include "main_window.h"
 
 #ifdef _WIN32
 #include <QScreen>
 #include "amd_driver_cache.h"
-#include "debug_report.h"
 
 static void OverrideWindowsFont() {
     // Qt5 chooses these fonts on Windows and they have fairly ugly alphanumeric/cyrillic characters
@@ -88,10 +88,12 @@ static Qt::HighDpiScaleFactorRoundingPolicy GetHighDpiRoundingPolicy() {
 }
 
 int main(int argc, char* argv[]) {
-#ifdef _WIN32
+#ifdef LICHII_HAS_DEBUG_REPORT
     if (DebugReport::RunCrashReportProcess(argc, argv)) {
         return 0;
     }
+#endif
+#ifdef _WIN32
     if (int exit_code = 0; AmdDriverCache::RunProbeProcess(&exit_code)) {
         return exit_code;
     }
@@ -125,7 +127,7 @@ int main(int argc, char* argv[]) {
 #ifdef LICHII_CRASH_DUMPS
     Breakpad::InstallCrashHandler();
 #endif
-#ifdef _WIN32
+#ifdef LICHII_HAS_DEBUG_REPORT
     // Before the log starts: a session that ended without closing still has its log in place.
     if (!is_child) {
         DebugReport::BeginSession();
@@ -239,7 +241,7 @@ int main(int argc, char* argv[]) {
         app.connect(&app, &QGuiApplication::applicationStateChanged, &main_window,
                     &MainWindow::OnAppFocusStateChanged);
         const int result = app.exec();
-#ifdef _WIN32
+#ifdef LICHII_HAS_DEBUG_REPORT
         DebugReport::EndSession();
 #endif
         return result;
