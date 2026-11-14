@@ -87,3 +87,15 @@ EDEN_NX2_FENCE_BATCH=1
 #EDEN_NX2_STUTTER_TRACE=0
 # Log every frame over this many ms (default 100 with the reports; 33 makes the log much longer).
 #EDEN_NX2_STUTTER_MS=33
+# Long sessions: every 300 s (the first after 60 s) one LichiiStats log line per part of the
+# emulator with the sizes that could grow over hours (caches, page tables, memory, CPU per thread,
+# frame times), summarized at the top of the debug report's summary.txt. =0 turns them off.
+#LICHII_SESSION_STATS_S=300
+# Slowdown fixes for long sessions (on; =0 restores the old behaviour, to compare):
+# - most pipelines each pipeline remembers as drawn after it (32); the list is searched per draw
+#   and grew all session.
+#EDEN_NX2_TRANSITION_CAP=0
+# - list flushes skip command list pages no list was read from for this many seconds (10).
+#EDEN_NX2_LIST_PAGE_IDLE_S=0
+# - the buffer collector looks past buffers it keeps for their GPU-written data.
+#EDEN_NX2_BUFFER_GC_SKIP_DIRTY=0
