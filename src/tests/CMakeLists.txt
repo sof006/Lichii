@@ -6,6 +6,7 @@
 add_executable(tests
     common/addon_config.cpp
     common/thread_worker.cpp
+    common/session_stats.cpp
     video_core/vulkan_overlay_filter.cpp
     video_core/buffer_cache_ports.cpp
     video_core/unswizzle_workers.cpp

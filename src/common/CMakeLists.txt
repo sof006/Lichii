@@ -91,6 +91,9 @@ add_library(
     math_util.h
     memory_detect.cpp
     memory_detect.h
+    session_stats.cpp
+    session_stats.h
+    session_stats_summary.cpp
     multi_level_page_table.cpp
     multi_level_page_table.h
     overflow.h

@@ -13,6 +13,7 @@
 
 #include <fmt/ranges.h>
 
+#include "common/session_stats.h"
 #include "common/display_hdr.h"
 #include "common/logging.h"
 #include <ranges>
@@ -238,12 +239,14 @@ try
         .api = "Vulkan",
     };
     Report();
+    Common::SessionStats::Start();
 } catch (const vk::Exception& exception) {
     LOG_ERROR(Render_Vulkan, "Vulkan initialization failed with error: {}", exception.what());
     throw std::runtime_error{fmt::format("Vulkan initialization error {}", exception.what())};
 }
 
 RendererVulkan::~RendererVulkan() {
+    Common::SessionStats::Stop();
     scheduler.RegisterOnSubmit([] {});
     void(device.GetLogical().WaitIdle());
 }
@@ -269,6 +272,7 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
         return;
     }
 
+    Common::SessionStats::OnFrame();
     if (VideoCommon::StutterTrace::Enabled()) {
         VideoCommon::StutterTrace::OnPresent();
     }

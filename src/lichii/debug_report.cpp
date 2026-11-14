@@ -43,6 +43,7 @@ extern char** environ;
 #include "common/fs/path_util.h"
 #include "common/logging.h"
 #include "common/scm_rev.h"
+#include "common/session_stats.h"
 #include "common/thread.h"
 #ifdef _WIN32
 #include "common/windows/crash_handler.h"
@@ -857,6 +858,8 @@ std::string Summary(const std::string& log) {
         text += '\n';
     };
     section("Crash", crashes);
+    // Long sessions: what grew, and how the frame rate went over time.
+    text += Common::SessionStats::SummarizeLog(log);
     section("Lichii, system and changed settings", header);
     section("Shader precache", precache);
 

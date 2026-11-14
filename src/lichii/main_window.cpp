@@ -1773,8 +1773,21 @@ void MainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Data_Manager, &MainWindow::OnDataDialog);
 #ifdef LICHII_HAS_DEBUG_REPORT
     if (DebugReport::Enabled()) {
+        // Help, above What's New: Save Debug Report and the folder the reports go to. (It used
+        // to be inserted before Log Folder, which is in File > Open Lichii Folders, so Qt put it
+        // at the end of Help.)
         auto* report_action = new QAction(tr("Save Debug Report"), this);
-        ui->menu_Help->insertAction(ui->action_Log_Folder, report_action);
+        auto* report_folder_action = new QAction(tr("Open Debug Reports Folder"), this);
+        ui->menu_Help->insertAction(ui->action_Whats_New, report_action);
+        ui->menu_Help->insertAction(ui->action_Whats_New, report_folder_action);
+        ui->menu_Help->insertSeparator(ui->action_Whats_New);
+        connect(report_folder_action, &QAction::triggered, this, [] {
+            const auto dir = DebugReport::ReportDirectory();
+            std::error_code ec;
+            std::filesystem::create_directories(dir, ec);
+            QDesktopServices::openUrl(QUrl::fromLocalFile(
+                QString::fromStdString(Common::FS::PathToUTF8String(dir))));
+        });
         connect(report_action, &QAction::triggered, this, [this] {
             const auto report = DebugReport::WriteNow(DebugReport::Kind::Manual);
             if (report.empty()) {
