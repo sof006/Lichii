@@ -48,8 +48,7 @@ public:
     /// The section's fields, "key=value key=value".
     void Publish(std::string fields);
 
-private:
-    friend struct Registry;
+    // Read by the stats thread under its registry lock.
     std::string name;
     std::string fields;
     u32 seen_request{};
