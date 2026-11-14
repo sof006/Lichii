@@ -105,6 +105,28 @@ double HistogramPercentile(const std::map<u32, u64>& histogram, u64 frames, doub
     return histogram.empty() ? 0.0 : static_cast<double>(histogram.rbegin()->first) + 1.0;
 }
 
+/// Counts since the start: they always grow, so they go in their own list, as rates.
+bool RunningTotal(std::string_view section, std::string_view key) {
+    static constexpr std::array<std::pair<std::string_view, std::string_view>, 14> totals{{
+        {"pipeline_cache", "frames"},
+        {"pipeline_cache", "vulkan_cache_flushes"},
+        {"texture_cache", "created"},
+        {"texture_cache", "deleted"},
+        {"texture_cache", "pressure_events"},
+        {"texture_cache", "failed_images"},
+        {"buffer_cache", "deletions"},
+        {"buffer_cache", "list_flushes"},
+        {"buffer_cache", "list_flush_page_downloads"},
+        {"buffer_cache", "list_flush_idle_skips"},
+        {"process", "minflt"},
+        {"process", "majflt"},
+        // Frames in each line's window: the first window is shorter than the others.
+        {"frames", "frames"},
+        {"frames", "over20"},
+    }};
+    return std::ranges::find(totals, std::pair{section, key}) != totals.end();
+}
+
 std::string Short(double value) {
     if (std::fabs(value) >= 100.0 || value == std::floor(value)) {
         return fmt::format("{:.0f}", value);
@@ -119,6 +141,9 @@ std::string SummarizeLog(std::string_view log, double block_s) {
     std::map<std::string, std::map<std::string, Series>, std::less<>> series;
     std::map<double, Row> rows;
     std::map<long long, Block> blocks;
+    // Each game boot starts the lines again at t=60: only the last boot's lines are summarized.
+    double last_process_t = -1.0;
+    u32 earlier_runs = 0;
 
     for (size_t begin = 0; begin < log.size();) {
         const size_t end = (std::min)(log.find('\n', begin), log.size());
@@ -141,6 +166,14 @@ std::string SummarizeLog(std::string_view log, double block_s) {
             const auto t = Number(rest.substr(2, rest.find(' ') - 2));
             if (!t) {
                 continue;
+            }
+            if (section == "process") {
+                if (*t <= last_process_t) {
+                    series.clear();
+                    rows.clear();
+                    ++earlier_runs;
+                }
+                last_process_t = *t;
             }
             Row& row = rows[*t];
             if (section == "frames") {
@@ -228,6 +261,11 @@ std::string SummarizeLog(std::string_view log, double block_s) {
     if (!rows.empty()) {
         text += "== Long session: LichiiStats lines (every LICHII_SESSION_STATS_S, 300 s by "
                 "default)\n";
+        if (earlier_runs != 0) {
+            text += fmt::format("The game was booted {} more time(s) earlier in this log; only "
+                                "the last boot is shown.\n",
+                                earlier_runs);
+        }
         text += "   min    fps  p50_ms  p99_ms  max_ms  rss_mib  cpu_ms/s  gpu_ms/s  "
                 "vram_mib  busiest threads (ms of CPU per s)\n";
         for (const auto& [t, row] : rows) {
@@ -268,6 +306,7 @@ std::string SummarizeLog(std::string_view log, double block_s) {
             std::string line;
         };
         std::vector<Change> changes;
+        std::string totals;
         for (const auto& [section, keys] : series) {
             for (const auto& [key, entry] : keys) {
                 if (entry.samples < 2 || entry.first == entry.last) {
@@ -275,6 +314,13 @@ std::string SummarizeLog(std::string_view log, double block_s) {
                 }
                 const double hours = (entry.last_t - entry.first_t) / 3600.0;
                 const double delta = entry.last - entry.first;
+                if (RunningTotal(section, key)) {
+                    if (hours > 0.0 && section != "frames") {
+                        totals += fmt::format("  {}.{}: {} at the end, {:.4g} per hour\n", section,
+                                              key, Short(entry.last), delta / hours);
+                    }
+                    continue;
+                }
                 const double relative =
                     std::fabs(delta) / (std::max)(std::fabs(entry.first), 1.0);
                 changes.push_back(
@@ -293,6 +339,10 @@ std::string SummarizeLog(std::string_view log, double block_s) {
         for (size_t index = 0; index < (std::min<size_t>)(changes.size(), 120); ++index) {
             text += changes[index].line;
             text += '\n';
+        }
+        if (!totals.empty()) {
+            text += "\nRunning totals (always grow; the rate is what matters):\n";
+            text += totals;
         }
         text += '\n';
     }

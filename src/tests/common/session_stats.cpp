@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <string>
+#include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/format.h>
 
 #include "common/session_stats.h"
 
@@ -78,6 +80,36 @@ TEST_CASE("SessionStats: the summary shows the stutter trace's frame rate over t
     // Second block: 30 fps, 180 frames over 33 ms a minute, texture 50 ms per second.
     REQUIRE(Contains(text, "   30.0   34   41       180.0"));
     REQUIRE(Contains(text, "     50.0"));
+}
+
+TEST_CASE("SessionStats: running totals and earlier boots stay out of the growth list",
+          "[common]") {
+    const auto line = [](int t, std::string_view section, std::string_view fields) {
+        return fmt::format("[{:>12.6f}] Common <Info> common/session_stats.cpp:1:LogLines: "
+                           "LichiiStats {} t={} {}\n",
+                           static_cast<double>(t), section, t, fields);
+    };
+    std::string log;
+    // A first boot whose sizes would otherwise lead the list.
+    log += line(60, "process", "rss_mib=1000");
+    log += line(60, "buffer_cache", "buffers=10 deletions=5");
+    log += line(3600, "process", "rss_mib=9000");
+    log += line(3600, "buffer_cache", "buffers=99999 deletions=50");
+    // The game booted again: its lines start at t=60.
+    log += line(60, "process", "rss_mib=2000");
+    log += line(60, "texture_cache", "images=100 created=1000");
+    log += line(3660, "process", "rss_mib=2100");
+    log += line(3660, "texture_cache", "images=150 created=91000");
+    const std::string text = Common::SessionStats::SummarizeLog(log);
+    INFO(text);
+    REQUIRE(Contains(text, "booted 1 more time(s) earlier"));
+    REQUIRE_FALSE(Contains(text, "buffer_cache.buffers"));
+    REQUIRE(Contains(text, "process.rss_mib: 2000 -> 2100"));
+    REQUIRE(Contains(text, "texture_cache.images: 100 -> 150"));
+    // Created textures are a count since boot: listed apart, as a rate.
+    REQUIRE_FALSE(Contains(text, "texture_cache.created: 1000 -> 91000"));
+    REQUIRE(Contains(text, "Running totals"));
+    REQUIRE(Contains(text, "texture_cache.created: 91000 at the end, 9e+04 per hour"));
 }
 
 TEST_CASE("SessionStats: nothing to say without the lines", "[common]") {
