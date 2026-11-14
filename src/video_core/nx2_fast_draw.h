@@ -70,6 +70,13 @@ inline std::atomic<bool> g_enabled{true};
 /// in the pipeline key. Set by the pipeline cache before the GPU threads run, read on the back.
 inline std::atomic<bool> g_dynamic_vertex_input{};
 
+/// Whether vertex stream strides, enables and instance divisors are draw parameters too: with
+/// dynamic vertex input and extended dynamic state the pipeline key holds none of them, and each
+/// draw binds the vertex buffers and records the vertex input their dirty flags ask for (Ocarina of
+/// Time changes stream 0's stride between ~20k draws/s). EDEN_NX2_FAST_DRAW_STRIDES=0 turns it off.
+/// Set by the pipeline cache before the GPU threads run.
+inline std::atomic<bool> g_dynamic_vertex_strides{};
+
 /// Any thread: whether fast draws run (always, unless a test turned them off). The rasterizer
 /// latches it per draw (on the thread that draws) and starts with a full resolve when it turns on.
 [[nodiscard]] inline bool Enabled() {

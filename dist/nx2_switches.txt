@@ -99,3 +99,8 @@ EDEN_NX2_FENCE_BATCH=1
 #EDEN_NX2_LIST_PAGE_IDLE_S=0
 # - the buffer collector looks past buffers it keeps for their GPU-written data.
 #EDEN_NX2_BUFFER_GC_SKIP_DIRTY=0
+
+# Cheaper draws (on; =0 restores the old behaviour, to compare):
+# - a change of vertex buffer stride, enable or instance rate no longer makes the next draw
+#   redo all of its setup (Ocarina of Time does this about 20000 times a second in Hyrule Field).
+#EDEN_NX2_FAST_DRAW_STRIDES=0

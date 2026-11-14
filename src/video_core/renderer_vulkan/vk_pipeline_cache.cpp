@@ -939,6 +939,14 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
         StaticVertexRepackEnabled(device.GetMinVertexInputBindingStrideAlignment());
     VideoCommon::Nx2FastDraw::g_dynamic_vertex_input.store(
         dynamic_features.has_dynamic_vertex_input, std::memory_order_relaxed);
+    {
+        const char* const strides = std::getenv("EDEN_NX2_FAST_DRAW_STRIDES");
+        VideoCommon::Nx2FastDraw::g_dynamic_vertex_strides.store(
+            dynamic_features.has_dynamic_vertex_input &&
+                dynamic_features.has_extended_dynamic_state &&
+                !(strides != nullptr && std::string_view{strides} == "0"),
+            std::memory_order_relaxed);
+    }
 
     dynamic_features.has_provoking_vertex = device.IsExtProvokingVertexSupported();
     dynamic_features.has_provoking_vertex_first_mode =

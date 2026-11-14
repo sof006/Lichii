@@ -484,6 +484,32 @@ TEST_CASE("Fast draw keeps vertex stream addresses and sizes light", "[fast_draw
     CHECK_FALSE(light(0x600 / 4 + 64));   // past the sizes
 }
 
+TEST_CASE("Fast draw keeps vertex stream strides light only when they are dynamic state",
+          "[fast_draw]") {
+    DeltaFixture f;
+    const auto stream = [](u32 index, u32 word) {
+        return static_cast<u32>(MAXWELL3D_REG_INDEX(vertex_streams) + index * 4 + word);
+    };
+    const auto light = [&](u32 method) {
+        FastDraw::g_delta = {};
+        const u64 serial = FastDraw::Serial();
+        f.Write(method, f.Reg(method) + 0x40);
+        return FastDraw::Serial() == serial;
+    };
+    const bool previous = FastDraw::g_dynamic_vertex_strides.exchange(false);
+    CHECK_FALSE(light(stream(0, 0)));
+    CHECK_FALSE(light(stream(15, 3)));
+    FastDraw::g_dynamic_vertex_strides.store(true);
+    CHECK(light(stream(0, 0)));  // stride and enable
+    CHECK(light(stream(15, 3))); // frequency
+    CHECK(light(stream(2, 1)));
+    f.DrawArrays(0, 3);
+    f.Write(stream(0, 0), f.Reg(stream(0, 0)) + 4);
+    f.DrawArrays(3, 3);
+    CHECK(f.Reusable());
+    FastDraw::g_dynamic_vertex_strides.store(previous);
+}
+
 TEST_CASE("Fast draw keeps vertex attribute formats light only with dynamic vertex input",
           "[fast_draw]") {
     DeltaFixture f;
