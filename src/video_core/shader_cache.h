@@ -90,6 +90,9 @@ public:
     /// Runs on the thread that owns the cache, between frames.
     void RefreshDebugRejections(bool unrejected);
 
+    /// Shaders and lookup entries held (LichiiStats).
+    [[nodiscard]] std::string ShaderCacheStats();
+
 protected:
     struct GraphicsEnvironments {
         std::array<GraphicsEnvironment, NUM_PROGRAMS> envs;
@@ -176,8 +179,6 @@ private:
     /// Hash of the state task and mesh programs are translated with.
     u64 MeshStateHash() const;
 
-    /// Shaders and lookup entries held (LichiiStats).
-    [[nodiscard]] std::string ShaderCacheStats();
 
     Tegra::MaxwellDeviceMemoryManager& device_memory;
 
