@@ -323,8 +323,20 @@ struct BufferCacheTestAccess {
     static void DrawWrite(Cache& cache, DAddr page) {
         std::scoped_lock lock{cache.nx2_list_mutex};
         auto& entry = cache.nx2_list_pages[page];
-        entry.draw_written = true;
+        if (!entry.draw_written) {
+            entry.draw_written = true;
+            cache.nx2_draw_written_pages.emplace_back(page, &entry);
+        }
         ++entry.writes;
+    }
+    /// No list was read from `page` for an hour (Nx2FlushListPages' idle skip).
+    static void Idle(Cache& cache, DAddr page) {
+        std::scoped_lock lock{cache.nx2_list_mutex};
+        cache.nx2_list_pages[page].list_use = std::chrono::steady_clock::now() - std::chrono::hours{1};
+    }
+    static u64 IdleSkips(Cache& cache) {
+        std::scoped_lock lock{cache.nx2_list_mutex};
+        return cache.nx2_list_flush_idle_skips;
     }
     static void Download(Cache& cache, std::span<const std::pair<DAddr, u64>> ranges) {
         cache.DownloadRangesMemory(ranges);
@@ -818,6 +830,35 @@ TEST_CASE("Command page batch publishes only completed matching write generation
     REQUIRE(f.cache->Nx2ReadListCopy(0x21000, out, false) == Read::NeedsSync);
     Access::DrawWrite(*f.cache, 0x21000);
     REQUIRE(f.cache->Nx2ReadListCopy(0x21000, out, true) == Read::Unknown);
+}
+
+TEST_CASE("Command page batch skips draw-written pages no list was read from for long",
+          "[buffer_ports]") {
+    Fixture f;
+    const auto id = Access::Add(*f.cache, 0x20000, 0x10000, false);
+    std::ranges::fill(Access::Get(*f.cache, id).bytes, 0x42);
+    Access::Dirty(*f.cache, 0x20000, 0x3000);
+    Access::DrawWrite(*f.cache, 0x20000);
+    Access::DrawWrite(*f.cache, 0x21000);
+    Access::DrawWrite(*f.cache, 0x22000);
+    // 0x21000 was read from just now; 0x22000 not for an hour.
+    std::array<u8, 4> out{};
+    using Read = Cache::Nx2ListRead;
+    REQUIRE(f.cache->Nx2ReadListCopy(0x21000, out, true) == Read::Unknown);
+    Access::Idle(*f.cache, 0x22000);
+    const std::array<DAddr, 1> requested{0x20000};
+    f.cache->Nx2FlushListPages(requested);
+    REQUIRE(f.runtime.downloads == 2U);
+    REQUIRE(Access::IdleSkips(*f.cache) == 1);
+    REQUIRE(f.cache->Nx2ReadListCopy(0x20000, out, true) == Read::Synced);
+    REQUIRE(f.cache->Nx2ReadListCopy(0x21000, out, true) == Read::Synced);
+    // The idle page stays unsynced: a list on it takes the full flush, asking for the page.
+    REQUIRE(f.cache->Nx2ReadListCopy(0x22000, out, true) == Read::Unknown);
+    REQUIRE(f.bytes[0x12000] == 0);
+    const std::array<DAddr, 1> idle_page{0x22000};
+    f.cache->Nx2FlushListPages(idle_page);
+    REQUIRE(f.cache->Nx2ReadListCopy(0x22000, out, true) == Read::Synced);
+    REQUIRE(f.bytes[0x12000] == 0x42);
 }
 
 TEST_CASE("Command page readers remain ordered during batch completion", "[buffer_ports]") {
