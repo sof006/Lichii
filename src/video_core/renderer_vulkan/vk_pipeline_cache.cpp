@@ -2443,6 +2443,7 @@ void PipelineCache::QueueVulkanPipelineCacheFlush() {
     }
     pipelines_since_flush = 0;
     last_flush = now;
+    ++vulkan_cache_flushes;
     serialization_thread.QueueWork([this] {
         SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename, vulkan_pipeline_cache,
                                      CACHE_VERSION);
@@ -2666,6 +2667,9 @@ PipelineCache::WarmResult PipelineCache::WarmGraphicsLibraries(
 /// with, and every 600 frames evicts unused pipelines and forgets old render target records.
 void PipelineCache::TickFrame() {
     ++frame_count;
+    if (session_stats.Due()) {
+        PublishSessionStats();
+    }
     native_wait_budget_us =
         static_cast<s64>(Settings::values.native_pipeline_wait_ms.GetValue()) * 1000;
     if (device.IsExtGraphicsPipelineLibrarySupported()) {
@@ -2704,6 +2708,32 @@ void PipelineCache::TickFrame() {
             prebuild_load_begin.reset();
         }
     }
+}
+
+void PipelineCache::PublishSessionStats() {
+    size_t graphics = 0;
+    size_t built = 0;
+    size_t failed = 0;
+    size_t transitions = 0;
+    size_t max_transitions = 0;
+    for (const auto& [key, pipeline] : graphics_cache) {
+        if (!pipeline) {
+            ++failed;
+            continue;
+        }
+        ++graphics;
+        built += pipeline->IsBuilt() ? 1 : 0;
+        transitions += pipeline->TransitionCount();
+        max_transitions = (std::max)(max_transitions, pipeline->TransitionCount());
+    }
+    session_stats.Publish(fmt::format(
+        "graphics={} built={} null={} compute={} transitions={} max_transitions={} "
+        "evicted_pending={} evicted_hashes={} kept_stages={} kept_stages_kib={} "
+        "used_this_session={} {} vulkan_cache_mib={} vulkan_cache_flushes={} frames={}",
+        graphics, built, failed, compute_cache.size(), transitions, max_transitions,
+        evicted_pipelines.size(), evicted_hashes.size(), kept_stages.Size(),
+        kept_stages.Bytes() >> 10, used_this_session.size(), ShaderCacheStats(),
+        last_cache_size.load(std::memory_order_relaxed) >> 20, vulkan_cache_flushes, frame_count));
 }
 
 void PipelineCache::EvictUnusedPipelines() {

@@ -519,4 +519,22 @@ const ShaderInfo* ShaderCache::MakeShaderInfo(GenericEnvironment& env, VAddr cpu
     return result;
 }
 
+std::string ShaderCache::ShaderCacheStats() {
+    size_t shaders;
+    size_t lookups;
+    {
+        std::scoped_lock lock{lookup_mutex};
+        shaders = storage.size();
+        lookups = lookup_cache.size();
+    }
+    size_t invalidation_pages;
+    {
+        std::scoped_lock lock{invalidation_mutex};
+        invalidation_pages = invalidation_cache.size();
+    }
+    return fmt::format("shaders={} shader_lookups={} shader_invalidation_pages={} "
+                       "shader_filter_pages={}",
+                       shaders, lookups, invalidation_pages, page_filter.CountPages());
+}
+
 } // namespace VideoCommon

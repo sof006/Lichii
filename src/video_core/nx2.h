@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <functional>
 #include <map>
@@ -107,6 +108,16 @@ inline void Nx2ClearGpuWrittenPages() {
         word.store(0, std::memory_order_relaxed);
     }
     g_nx2_has_command_list_pages.store(false, std::memory_order_relaxed);
+}
+
+/// Set bits of one of the page bitmaps above (LichiiStats; the bits never clear).
+template <size_t N>
+[[nodiscard]] inline u64 Nx2CountPages(const std::array<std::atomic<u64>, N>& bits) {
+    u64 pages = 0;
+    for (const auto& word : bits) {
+        pages += static_cast<u64>(std::popcount(word.load(std::memory_order_relaxed)));
+    }
+    return pages;
 }
 
 [[nodiscard]] inline bool Nx2IsGpuWritten(u64 device_address) {

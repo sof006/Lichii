@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <span>
+#include <string>
 #include "video_core/page_filter.h"
 #include "common/container/unordered_map.h"
 #include <utility>
@@ -174,6 +175,9 @@ private:
     void RememberRejection(VAddr addr);
     /// Hash of the state task and mesh programs are translated with.
     u64 MeshStateHash() const;
+
+    /// Shaders and lookup entries held (LichiiStats).
+    [[nodiscard]] std::string ShaderCacheStats();
 
     Tegra::MaxwellDeviceMemoryManager& device_memory;
 

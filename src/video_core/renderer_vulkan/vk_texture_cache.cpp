@@ -2909,6 +2909,15 @@ void TextureCacheRuntime::LogMemoryTrace() {
     Vulkan::LogMemoryTrace(device);
 }
 
+std::string TextureCacheRuntime::SessionStatsFields() {
+    return fmt::format("vk_usage_mib={} vk_budget_mib={} vk_local_mib={} recycled_mib={} "
+                       "pressure_events={} failed_images={} {}",
+                       GetDeviceMemoryUsage() >> 20, GetDeviceMemoryBudget() >> 20,
+                       GetDeviceLocalMemory() >> 20, GetRecycledImageMemory() >> 20,
+                       MemoryPressureEvents(), FailedImages(),
+                       staging_buffer_pool.SessionStatsFields());
+}
+
 bool TextureCacheRuntime::UseOpaqueAstcFormat() const {
     // EDEN_NX2_ASTC_BC1=0 keeps every re-compressed ASTC image in BC3.
     static const bool enabled = [] {

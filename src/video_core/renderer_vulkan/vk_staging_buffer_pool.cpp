@@ -295,6 +295,30 @@ u64 StagingBufferPool::CachedBytes(MemoryUsage usage) {
     return bytes;
 }
 
+std::string StagingBufferPool::SessionStatsFields() {
+    std::string text;
+    for (const auto& [name, usage] : {std::pair{"upload", MemoryUsage::Upload},
+                                      std::pair{"download", MemoryUsage::Download},
+                                      std::pair{"device", MemoryUsage::DeviceLocal}}) {
+        const StagingBuffersCache& cache = GetCache(usage);
+        size_t entries = 0;
+        size_t deferred = 0;
+        size_t largest_level = 0;
+        for (size_t level = 0; level < NUM_LEVELS; ++level) {
+            entries += cache[level].entries.size();
+            largest_level = (std::max)(largest_level, cache[level].entries.size());
+            for (const StagingBuffer& buffer : cache[level].entries) {
+                deferred += buffer.deferred ? 1 : 0;
+            }
+        }
+        text += fmt::format("{}staging_{}={} staging_{}_deferred={} staging_{}_level_max={} "
+                            "staging_{}_mib={}",
+                            text.empty() ? "" : " ", name, entries, name, deferred, name,
+                            largest_level, name, CachedBytes(usage) >> 20);
+    }
+    return text;
+}
+
 void StagingBufferPool::ReleaseCache(MemoryUsage usage) {
     ReleaseLevel(GetCache(usage), current_delete_level);
 }

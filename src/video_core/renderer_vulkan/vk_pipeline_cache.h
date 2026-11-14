@@ -20,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <type_traits>
+#include "common/session_stats.h"
 #include "common/container/unordered_map.h"
 #include <vector>
 
@@ -400,6 +401,11 @@ private:
     std::chrono::steady_clock::time_point last_flush{};
     std::atomic<size_t> last_cache_size{};
     std::atomic_bool flush_in_flight{};
+    u64 vulkan_cache_flushes{}; ///< Driver cache saves queued during play
+
+    /// Every few minutes: the sizes that could grow over a session (LichiiStats pipeline_cache)
+    void PublishSessionStats();
+    Common::SessionStats::Publisher session_stats{"pipeline_cache"};
 
     /// Requested first when the cache is destroyed, to stop a rewrite of the disk cache: Android
     /// and lichii_cmd load with a stop token that never stops

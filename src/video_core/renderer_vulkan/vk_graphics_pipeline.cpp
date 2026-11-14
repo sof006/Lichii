@@ -10,6 +10,7 @@
 #include <cstring>
 #include <chrono>
 #include <future>
+#include <limits>
 #include <string>
 #include <iostream>
 #include <span>
@@ -914,7 +915,32 @@ KeptGraphicsStages GraphicsPipeline::TakeKeptStages() {
     return kept;
 }
 
+namespace {
+/// EDEN_NX2_TRANSITION_CAP: most transitions a pipeline keeps (32; 0 keeps every one, as before).
+/// Next() compares the draw's key with each of them on every draw. The lists were cleared only
+/// when pipelines were evicted, and since pipelines are kept up to a memory limit (upstream
+/// #1334) a desktop with 16 GB or more evicts none: a pipeline drawn in many places collects
+/// every pipeline drawn after it over the whole session, scanned per draw on the GPU thread.
+size_t TransitionCap() {
+    static const size_t cap = [] {
+        const char* const value = std::getenv("EDEN_NX2_TRANSITION_CAP");
+        if (value == nullptr || *value == 0) {
+            return size_t{32};
+        }
+        const long parsed = std::strtol(value, nullptr, 10);
+        return parsed <= 0 ? std::numeric_limits<size_t>::max() : static_cast<size_t>(parsed);
+    }();
+    return cap;
+}
+} // Anonymous namespace
+
 void GraphicsPipeline::AddTransition(GraphicsPipeline* transition) {
+    // Full: forget the older half. A miss only costs the pipeline cache's hash lookup.
+    if (const size_t cap = TransitionCap(); transition_keys.size() >= cap) {
+        const auto drop = static_cast<std::ptrdiff_t>((std::max<size_t>)(cap / 2, 1));
+        transition_keys.erase(transition_keys.begin(), transition_keys.begin() + drop);
+        transitions.erase(transitions.begin(), transitions.begin() + drop);
+    }
     transition_keys.push_back(transition->key);
     transitions.push_back(transition);
 }

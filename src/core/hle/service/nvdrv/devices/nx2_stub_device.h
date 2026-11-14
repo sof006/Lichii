@@ -331,6 +331,19 @@ public:
         return cpu_address ? DeviceAddressOf(*cpu_address) : std::nullopt;
     }
 
+    /// Sizes for the LichiiStats lines; takes each lock on its own.
+    [[nodiscard]] std::array<size_t, 3> Counts() {
+        std::array<size_t, 3> counts{};
+        {
+            std::scoped_lock lk{mutex};
+            counts[0] = mappings.size();
+        }
+        std::scoped_lock lk{device_mutex};
+        counts[1] = device_ranges.size();
+        counts[2] = shared_ranges.size();
+        return counts;
+    }
+
 private:
     // Separate lock: ranges are recorded from listeners that run under `mutex`.
     std::mutex device_mutex;

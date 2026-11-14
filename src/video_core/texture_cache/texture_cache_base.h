@@ -32,6 +32,7 @@
 #include "common/lru_cache.h"
 #include <ranges>
 #include "common/scratch_buffer.h"
+#include "common/session_stats.h"
 #include "common/slot_vector.h"
 #include "video_core/texture_cache/pending_download.h"
 #include "common/thread_worker.h"
@@ -192,6 +193,8 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
     u64 astc_alpha_images{};
     Common::ScratchBuffer<u8> astc_scan_buffer;
     u64 images_deleted{};
+    u64 session_images_created{}; ///< Since boot (LichiiStats)
+    u64 session_images_deleted{};
     u64 scale_epoch{};
     std::map<u64, std::pair<u32, GPUVAddr>> created_shapes;
     bool debug_stats{}; ///< Collect what only the debug statistics lines use
@@ -276,6 +279,10 @@ public:
 
     /// Notify the cache that a new frame has been queued
     void TickFrame();
+
+    /// Every few minutes: sizes that could grow over a session (LichiiStats texture_cache).
+    void PublishSessionStats();
+    ::Common::SessionStats::Publisher session_stats{"texture_cache"};
 
     /// Return a constant reference to the given image view id
     [[nodiscard]] const ImageView& GetImageView(ImageViewId id) const noexcept;

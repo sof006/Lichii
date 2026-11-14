@@ -131,6 +131,9 @@ public:
     /// EDEN_NX2_MEM_TRACE: staging buffers, then the process, DXGI and VMA (LogMemoryTrace).
     void LogMemoryTrace();
 
+    /// Device memory and staging buffers for the texture cache's LichiiStats line.
+    [[nodiscard]] std::string SessionStatsFields();
+
     /// True when ASTC is re-compressed to BC3 and opaque images may use BC1 instead.
     bool UseOpaqueAstcFormat() const;
 

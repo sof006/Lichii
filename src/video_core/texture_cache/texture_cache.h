@@ -397,6 +397,48 @@ void TextureCache<P>::LogThresholds() const {
 }
 
 template <class P>
+void TextureCache<P>::PublishSessionStats() {
+    u64 image_bytes = 0;
+    size_t images = 0;
+    for (const auto [image_id, image] : slot_images) {
+        ++images;
+        if (False(image->flags & ImageFlagBits::Unbacked)) {
+            image_bytes += GetScaledImageSizeBytes(*image);
+        }
+    }
+    size_t page_entries = 0;
+    for (const auto& [page, ids] : page_table) {
+        page_entries += ids.size();
+    }
+    size_t gpu_pages = 0;
+    size_t gpu_page_entries = 0;
+    for (const auto& map : gpu_page_table_storage) {
+        gpu_pages += map.size();
+        for (const auto& [page, ids] : map) {
+            gpu_page_entries += ids.size();
+        }
+    }
+    std::string runtime_fields;
+    if constexpr (requires { runtime.SessionStatsFields(); }) {
+        runtime_fields = runtime.SessionStatsFields();
+    }
+    session_stats.Publish(fmt::format(
+        "images={} image_mib={} image_views={} samplers={} framebuffers={} "
+        "view_descriptors={} pages={} page_entries={} gpu_maps={} gpu_pages={} "
+        "gpu_page_entries={} channel_views={} channel_samplers={} filter_pages={} "
+        "used_mib={} expected_mib={} critical_mib={} sentenced_gpu_mib={} async_decodes={} "
+        "created={} deleted={} {}",
+        images, image_bytes >> 20, slot_image_views.size(), slot_samplers.size(),
+        framebuffers.size(), image_view_descriptors.size(), page_table.size(), page_entries,
+        gpu_page_table_storage.size(), gpu_pages, gpu_page_entries,
+        channel_state ? channel_state->image_views.size() : 0,
+        channel_state ? channel_state->samplers.size() : 0, page_filter.CountPages(),
+        total_used_memory >> 20, expected_memory >> 20, critical_memory >> 20,
+        gpu_sentenced_bytes >> 20, async_decodes.size(), session_images_created,
+        session_images_deleted, runtime_fields));
+}
+
+template <class P>
 void TextureCache<P>::TickFrame() {
     // Upload buffers grown for one huge image (title 1's 341 MiB terrain layer pools) are freed
     // rather than kept for the rest of the session.
@@ -532,6 +574,9 @@ void TextureCache<P>::TickFrame() {
                 runtime.ShrinkRecycledImages(kept / 2);
             }
         }
+    }
+    if (session_stats.Due()) {
+        PublishSessionStats();
     }
     // EDEN_NX2_MEM_TRACE=1: every 2 s, what the cache holds next to what the process and the
     // driver report (memory climbs).
@@ -3223,6 +3268,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
             shape.second = gpu_addr;
         }
         ++images_created;
+        ++session_images_created;
         ++churn.created;
         churn.joins += join_overlap_ids.empty() ? 0 : 1;
     }
@@ -4132,6 +4178,7 @@ void TextureCache<P>::DeleteImage(ImageId image_id, bool immediate_delete) {
     const StutterTrace::SiteScope site{StutterTrace::Site::ImageDelete};
     ImageBase& image = slot_images[image_id];
     ++images_deleted;
+    ++session_images_deleted;
     ++churn.deleted;
     VideoCommon::Nx2FastDraw::Break(VideoCommon::Nx2FastDraw::Reason::Invalidation);
     // Drop every decode still queued for it, whatever IsDecoding says: an image re-decoded while

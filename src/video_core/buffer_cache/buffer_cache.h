@@ -83,11 +83,21 @@ void BufferCache<P>::RunGarbageCollector(bool aggressive_gc) {
     // buffer stalled the GPU thread every frame on title 1 (an 8 GB GPU near its budget, no
     // per-fence downloads keeping the buffers clean), ~2.5% of its time.
     boost::container::small_vector<BufferId, 64> evicted;
+    // EDEN_NX2_BUFFER_GC_SKIP_DIRTY (on; 0 off): buffers kept for their GPU-written data don't use
+    // up the pass, as upstream #1731 did for textures. Before, 32 such buffers at the old end of
+    // the LRU let nothing behind them go until the cache reached the aggressive threshold.
+    static const bool skip_dirty = [] {
+        const char* const value = std::getenv("EDEN_NX2_BUFFER_GC_SKIP_DIRTY");
+        return value == nullptr || value[0] != '0';
+    }();
+    int examined = num_iterations * 8;
     lru_cache.ForEachItemBelow(frame_tick - ticks_to_destroy, [&](BufferId buffer_id) {
-        if (num_iterations == 0) {
+        if (num_iterations == 0 || (skip_dirty && examined-- == 0)) {
             return true;
         }
-        --num_iterations;
+        if (!skip_dirty) {
+            --num_iterations;
+        }
         // Below the critical threshold, buffers holding GPU-written data stay: evicting one
         // means downloading it first. The thresholds compare the whole device's use (mostly
         // textures) with fixed headroom, so on an 8 GB GPU the collector ran every frame once a
@@ -95,6 +105,9 @@ void BufferCache<P>::RunGarbageCollector(bool aggressive_gc) {
         const Buffer& buffer = slot_buffers[buffer_id];
         if (!aggressive_gc && gpu_modified_ranges.Intersects(buffer.CpuAddr(), buffer.SizeBytes())) {
             return false;
+        }
+        if (skip_dirty) {
+            --num_iterations;
         }
         evicted.push_back(buffer_id);
         return false;
@@ -116,12 +129,59 @@ void BufferCache<P>::RunGarbageCollector(bool aggressive_gc) {
 }
 
 template <class P>
+void BufferCache<P>::PublishSessionStats() {
+    const auto count = [](const auto& set) {
+        u64 intervals = 0;
+        u64 bytes = 0;
+        set.ForEach([&](DAddr lower, DAddr upper) {
+            ++intervals;
+            bytes += upper - lower;
+        });
+        return std::pair{intervals, bytes};
+    };
+    const auto [read_intervals, read_bytes] = count(cpu_read_ranges);
+    const auto [modified_intervals, modified_bytes] = count(gpu_modified_ranges);
+    size_t list_pages = 0;
+    size_t list_copies = 0;
+    size_t retired_copies = 0;
+    u64 flushes = 0;
+    u64 flush_downloads = 0;
+    u64 idle_skips = 0;
+    {
+        std::scoped_lock lock{nx2_list_mutex};
+        list_pages = nx2_list_pages.size();
+        for (const auto& [page, entry] : nx2_list_pages) {
+            list_copies += entry.copy ? 1 : 0;
+        }
+        retired_copies = nx2_retired_list_copies.size();
+        flushes = nx2_list_flushes;
+        flush_downloads = nx2_list_flush_downloads;
+        idle_skips = nx2_list_flush_idle_skips;
+    }
+    session_stats.Publish(fmt::format(
+        "buffers={} buffer_mib={} deletions={} cpu_read_intervals={} cpu_read_mib={} "
+        "gpu_modified_intervals={} gpu_modified_mib={} read_downloads={} kept_words={} "
+        "list_pages={} list_draw_written={} list_copies={} list_retired_copies={} "
+        "list_flushes={} list_flush_page_downloads={} list_flush_idle_skips={} "
+        "gpu_written_pages={} command_list_pages={}",
+        slot_buffers.size(), buffer_bytes >> 20, buffer_deletions, read_intervals,
+        read_bytes >> 20, modified_intervals, modified_bytes >> 20, read_downloads.size(),
+        nx2_kept_words.size(), list_pages, nx2_draw_written_pages.size(), list_copies,
+        retired_copies, flushes, flush_downloads, idle_skips,
+        Tegra::Nx2CountPages(Tegra::g_nx2_gpu_written_pages),
+        Tegra::Nx2CountPages(Tegra::g_nx2_command_list_pages)));
+}
+
+template <class P>
 void BufferCache<P>::TickFrame() {
     // Homebrew console apps don't create or bind any channels, so this will be nullptr.
     if (!channel_state) {
         return;
     }
     runtime.TickFrame(slot_buffers);
+    if (session_stats.Due()) {
+        PublishSessionStats();
+    }
     frame_created_buffers.clear();
     native_indirect_uniforms_this_frame.clear();
     static const bool mem_trace = std::getenv("EDEN_NX2_MEM_TRACE") != nullptr;
@@ -3810,6 +3870,7 @@ void BufferCache<P>::Nx2NoteListWrite(BufferId buffer_id, DAddr device_addr, u64
                         true);
                     if (!nx2_collect_list_copies && !entry.draw_written) {
                         entry.draw_written = true;
+                        nx2_draw_written_pages.emplace_back(page_addr, &entry);
                         LOG_INFO(HW_GPU, "Command list page {:#x} is written by draws too: its "
                                          "lists wait for the work before the last host sync",
                                  page_addr);
@@ -3914,6 +3975,7 @@ auto BufferCache<P>::Nx2ReadListCopy(DAddr device_addr, std::span<u8> out, bool 
             if (it == nx2_list_pages.end()) {
                 return Nx2ListRead::Unknown;
             }
+            it->second.list_use = std::chrono::steady_clock::now();
             const Nx2ListPage& entry = it->second;
             if (entry.draw_written) {
                 // EDEN_NX2_CMDPAGE_DRAIN=1: drain and flush for every list on such pages.
@@ -4043,13 +4105,40 @@ void BufferCache<P>::Nx2FlushListPages(std::span<const DAddr> pages) {
     }
     boost::container::small_vector<std::pair<DAddr, u64>, 16> drawn;
     if constexpr (!IS_OPENGL) {
+        // EDEN_NX2_LIST_PAGE_IDLE_S (10; 0 off): draw-written pages no list was read from for
+        // that long are not downloaded here. Pages stay command list pages for the session, and
+        // with the game reusing its heap more and more of them became ordinary memory that draws
+        // write every frame: each flush (hundreds a second) downloaded them all. A list read on
+        // a skipped page finds it unsynced and takes the flush with the page asked for.
+        static const auto idle = [] {
+            const char* const value = std::getenv("EDEN_NX2_LIST_PAGE_IDLE_S");
+            const long seconds = value != nullptr && *value != 0 ? std::strtol(value, nullptr, 10) : 10;
+            return std::chrono::seconds{seconds < 0 ? 0 : seconds};
+        }();
+        const auto now = std::chrono::steady_clock::now();
         std::scoped_lock lock{nx2_list_mutex};
-        for (const auto& [page, entry] : nx2_list_pages) {
-            if (entry.draw_written && entry.synced_writes != entry.writes) {
-                ranges.emplace_back(page, page_size);
-                drawn.emplace_back(page, entry.writes);
+        ++nx2_list_flushes;
+        for (const DAddr page : pages) {
+            if (const auto it = nx2_list_pages.find(page); it != nx2_list_pages.end()) {
+                it->second.list_use = now;
             }
         }
+        for (const auto& [page, entry] : nx2_draw_written_pages) {
+            if (entry->synced_writes == entry->writes) {
+                continue;
+            }
+            if (idle.count() != 0) {
+                if (entry->list_use == std::chrono::steady_clock::time_point{}) {
+                    entry->list_use = now;
+                } else if (now - entry->list_use > idle) {
+                    ++nx2_list_flush_idle_skips;
+                    continue;
+                }
+            }
+            ranges.emplace_back(page, page_size);
+            drawn.emplace_back(page, entry->writes);
+        }
+        nx2_list_flush_downloads += drawn.size();
     }
     DownloadRangesMemory(ranges);
     if constexpr (!IS_OPENGL) {

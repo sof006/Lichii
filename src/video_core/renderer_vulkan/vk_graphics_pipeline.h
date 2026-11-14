@@ -322,6 +322,10 @@ public:
     [[nodiscard]] KeptGraphicsStages TakeKeptStages();
 
     /// Forgets the transitions, which may point to pipelines the cache evicted.
+    [[nodiscard]] size_t TransitionCount() const noexcept {
+        return transitions.size();
+    }
+
     void ClearTransitions() noexcept {
         transition_keys.clear();
         transitions.clear();

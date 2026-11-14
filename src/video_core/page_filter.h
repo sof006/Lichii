@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <memory>
 
 #include "common/common_types.h"
@@ -61,6 +62,15 @@ public:
             page += count;
         }
         return false;
+    }
+
+    /// Pages marked so far (LichiiStats: the bits never clear, so this only grows).
+    [[nodiscard]] u64 CountPages() const {
+        u64 pages = 0;
+        for (u64 index = 0; index < NumWords; ++index) {
+            pages += static_cast<u64>(std::popcount(words[index].load(std::memory_order_relaxed)));
+        }
+        return pages;
     }
 
 private:

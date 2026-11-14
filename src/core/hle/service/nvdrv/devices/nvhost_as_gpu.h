@@ -241,6 +241,7 @@ private:
         size_t asid{};
     };
     std::map<std::pair<u64, u64>, Nx2DeviceRange> nx2_device_ranges;
+    u64 session_stats_source{}; ///< LichiiStats nvhost_as_gpu_N
     void Nx2Release(u64 cpu_address, u64 size);
 
     // Switch 2 sparse regions: a device range per region, mapped for the GPU when it's created;

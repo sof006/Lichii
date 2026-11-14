@@ -35,6 +35,7 @@
 #include "common/lru_cache.h"
 #include "common/range_sets.h"
 #include "common/scope_exit.h"
+#include "common/session_stats.h"
 #include "common/settings.h"
 #include "common/slot_vector.h"
 #include "shader_recompiler/shader_info.h"
@@ -253,6 +254,10 @@ public:
     ~BufferCache();
 
     void TickFrame();
+
+    /// Every few minutes: sizes that could grow over a session (LichiiStats buffer_cache).
+    void PublishSessionStats();
+    Common::SessionStats::Publisher session_stats{"buffer_cache"};
 
     bool BindMultiRangeStorage(const Binding& binding, bool is_written,
                                std::span<const MultiRangeSegment> pool,
@@ -1357,6 +1362,8 @@ private:
         std::bitset<Nx2ListPageWords> gpu_words;
         bool flushed{};
         std::optional<Nx2Staging> copy;
+        /// When the front last read a list from the page (Nx2FlushListPages' idle skip)
+        std::chrono::steady_clock::time_point list_use{};
     };
     /// Sets (`set`) or clears the words of `entry.gpu_words` within [begin, end) bytes of its
     /// page: every word the bytes touch when setting, only the words they cover when clearing.
@@ -1369,6 +1376,13 @@ private:
                           std::span<u8> out);
     std::mutex nx2_list_mutex; ///< nx2_list_pages: the split's front reads the copies
     std::unordered_map<DAddr, Nx2ListPage> nx2_list_pages;
+    /// The draw-written entries of nx2_list_pages (never erased, so the pointers stay valid):
+    /// Nx2FlushListPages walks these instead of every page the front ever read a list from.
+    std::vector<std::pair<DAddr, Nx2ListPage*>> nx2_draw_written_pages;
+    /// Nx2FlushListPages: calls, draw-written pages it downloaded and pages it skipped as idle
+    u64 nx2_list_flushes{};
+    u64 nx2_list_flush_downloads{};
+    u64 nx2_list_flush_idle_skips{};
     /// Copies replaced while the GPU may still write them: freed once it is past their tick.
     std::vector<std::pair<u64, Nx2Staging>> nx2_retired_list_copies;
     boost::container::small_vector<std::pair<BufferId, DAddr>, 8> nx2_list_copy_requests;

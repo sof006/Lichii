@@ -18,6 +18,7 @@
 #include "common/bit_util.h"
 #include "common/common_types.h"
 #include "common/logging.h"
+#include "common/session_stats.h"
 #include "core/core.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/service/nvdrv/core/container.h"
@@ -116,9 +117,27 @@ void Nx2RefreshBacking(Tegra::MaxwellDeviceMemoryManager& smmu, Core::Memory::Me
 
 nvhost_as_gpu::nvhost_as_gpu(Core::System& system_, Module& module_, NvCore::Container& core)
     : nvdevice{system_}, module{module_}, container{core}, nvmap{core.GetNvMapFile()}, vm{},
-      gmmu{} {}
+      gmmu{} {
+    static std::atomic<u32> instances{};
+    session_stats_source = Common::SessionStats::AddSource(
+        fmt::format("nvhost_as_gpu_{}", instances.fetch_add(1)), [this] {
+            size_t device_ranges;
+            size_t sparse_ranges;
+            {
+                std::scoped_lock lock{mutex};
+                device_ranges = nx2_device_ranges.size();
+                sparse_ranges = nx2_sparse_ranges.size();
+            }
+            const auto registry = Nx2GpuMemoryRegistry::Get().Counts();
+            return fmt::format("nx2_device_ranges={} nx2_sparse_ranges={} registry_mappings={} "
+                               "registry_device_ranges={} registry_shared_ranges={}",
+                               device_ranges, sparse_ranges, registry[0], registry[1],
+                               registry[2]);
+        });
+}
 
 nvhost_as_gpu::~nvhost_as_gpu() {
+    Common::SessionStats::RemoveSource(session_stats_source);
     Nx2GpuMemoryRegistry::Get().RemoveListener(this);
     // Leave shared ranges to the process's other address spaces; like this address space's own
     // ranges, one nobody else maps stays allocated.

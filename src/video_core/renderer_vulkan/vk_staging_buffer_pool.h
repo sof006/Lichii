@@ -6,6 +6,7 @@
 #pragma once
 
 #include <climits>
+#include <string>
 #include <vector>
 
 #include "common/common_types.h"
@@ -47,6 +48,9 @@ public:
 
     /// Bytes of the cached staging buffers of a kind, idle or in use (EDEN_NX2_MEM_TRACE).
     [[nodiscard]] u64 CachedBytes(MemoryUsage usage);
+
+    /// Cached staging buffers by kind, deferred ones counted apart (LichiiStats).
+    [[nodiscard]] std::string SessionStatsFields();
 
 private:
     struct StreamBufferCommit {
