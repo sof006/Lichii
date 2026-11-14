@@ -434,7 +434,7 @@ void Run(Registry& registry) {
     const u32 interval = ReadInterval();
     auto next = registry.start + FirstDelay;
     // The CPU times of the first lines are since now.
-    void(ProcessLines());
+    static_cast<void>(ProcessLines());
     std::unique_lock lock{registry.thread_mutex};
     while (!registry.stop) {
         if (registry.wake.wait_until(lock, next, [&registry] { return registry.stop; })) {
